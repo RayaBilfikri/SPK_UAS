@@ -1,0 +1,3353 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  LayoutDashboard,
+  UploadCloud,
+  TrendingUp,
+  ClipboardList,
+  Settings,
+  AlertTriangle,
+  CheckCircle2,
+  Info,
+  ChevronRight,
+  ArrowLeft,
+  FileSpreadsheet,
+  Sliders,
+  Wrench,
+  Activity,
+  HelpCircle,
+  Filter,
+  Plus,
+  Check,
+  ShieldAlert,
+  ArrowUpRight,
+  ArrowDownRight,
+  Minus,
+  History,
+  Save,
+  RotateCcw,
+} from 'lucide-react';
+
+/* ============================================================================
+ * 1. TYPES & API CONTRACTS (Merepresentasikan src/api/types.ts)
+ *    Struktur kontrak siap disambungkan ke backend FastAPI tanpa ubah UI.
+ * ============================================================================ */
+
+export type StatusKondisi = 'Normal' | 'Waspada' | 'Kritis';
+export type PeranPengguna = 'Engineer' | 'Team Leader';
+export type KodeSilinder = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9';
+export type HalamanAktif =
+  | 'dasbor'
+  | 'unggah'
+  | 'detail'
+  | 'tren'
+  | 'tindakan'
+  | 'pengaturan';
+
+export interface RincianValidasiItem {
+  tahap: string;
+  jumlah_jam: number;
+  keterangan: string;
+  tipe: 'ditolak' | 'dikoreksi' | 'lolos';
+}
+
+export interface HasilUnggahResponse {
+  periode: string;
+  nama_berkas: string;
+  terbaca: number;
+  valid: number;
+  ditolak: number;
+  hari_operasi: number;
+  rincian: RincianValidasiItem[];
+  aturan_validasi: string[];
+}
+
+export interface KriteriaNilai {
+  c1: number;
+  c2: number;
+  c3: number;
+  c4: number;
+}
+
+export interface KriteriaStatus {
+  c1: StatusKondisi;
+  c2: StatusKondisi;
+  c3: StatusKondisi;
+  c4: StatusKondisi;
+}
+
+export interface DataSilinderPeriode {
+  kode: KodeSilinder;
+  rerata_egt: number;
+  nilai: KriteriaNilai;
+  status_kriteria: KriteriaStatus;
+  status: StatusKondisi;
+  as: number;
+  urutan: number;
+  kontribusi: KriteriaNilai; // Persen dari w × NDA
+  pda: KriteriaNilai;
+  nda: KriteriaNilai;
+  penyebab_utama: string;
+  arah_pemeriksaan: string;
+  detail_pemeriksaan: string;
+  ringkasan_besaran: string;
+}
+
+export interface PeriodeResponse {
+  id: string;
+  periode: string;
+  ringkasan: {
+    kritis: number;
+    waspada: number;
+    normal: number;
+  };
+  av: KriteriaNilai;
+  silinder: DataSilinderPeriode[];
+}
+
+export interface TitikTrenHarian {
+  tanggal: string; // YYYY-MM-DD
+  label_tanggal: string; // e.g., "01 Agu"
+  dT: number;
+  dFR: number;
+}
+
+export interface TrenSilinderResponse {
+  kode: KodeSilinder;
+  kriteria: 'dT' | 'dFR';
+  harian: TitikTrenHarian[];
+  semua_silinder: Record<KodeSilinder, TitikTrenHarian[]>;
+  frekuensi: {
+    dT_ge_5: number;
+    dT_ge_10: number;
+    dFR_ge_5: number;
+    mingguan: { label: string; nilai: number }[];
+    keterangan_mingguan: string;
+  };
+  nilai_terakhir: number;
+  tanggal_terakhir: string;
+  arah_tren: 'Naik' | 'Turun' | 'Stabil';
+  selisih_awal_akhir: number;
+}
+
+export interface CatatanTindakanItem {
+  id: string;
+  silinder: KodeSilinder;
+  periode: string;
+  temuan: string;
+  tindakan: string;
+  tanggal: string;
+  nama_engineer: string;
+  status: 'Direncanakan' | 'Selesai';
+}
+
+export interface AmbangKriteriaConfig {
+  kriteria: 'C1' | 'C2' | 'C3' | 'C4';
+  nama: string;
+  satuan: string;
+  tipe: 'Benefit' | 'Cost';
+  normal: string;
+  waspada: string;
+  kritis: string;
+}
+
+export interface RiwayatPengaturanItem {
+  id: string;
+  pengguna: string;
+  waktu: string;
+  perubahan: string;
+}
+
+export interface PengaturanResponse {
+  ambang: AmbangKriteriaConfig[];
+  bobot: KriteriaNilai;
+  batas_operasi: {
+    egt: string;
+    fuel_rack: string;
+  };
+  riwayat: RiwayatPengaturanItem[];
+}
+
+/* ============================================================================
+ * 2. MOCK DATA STATIS (Merepresentasikan src/data/*.json)
+ *    Seluruh angka bersumber persis dari Bagian 7 & Bagian 9 PRD.
+ * ============================================================================ */
+
+const MOCK_HASIL_UNGGAH: HasilUnggahResponse = {
+  periode: 'Agustus 2025',
+  nama_berkas: 'Data_Patroli_Operasi_Agustus_2025.xlsx',
+  terbaca: 148,
+  valid: 140,
+  ditolak: 8,
+  hari_operasi: 21,
+  rincian: [
+    {
+      tahap: 'Data tidak lengkap',
+      jumlah_jam: 6,
+      keterangan: 'Sebagian kolom silinder, beban, atau putaran kosong',
+      tipe: 'ditolak',
+    },
+    {
+      tahap: 'Koreksi satuan beban',
+      jumlah_jam: 2,
+      keterangan: 'Tertulis 2,0 dan 2,1 (MW), dikoreksi menjadi kW',
+      tipe: 'dikoreksi',
+    },
+    {
+      tahap: 'Putaran bukan 500 rpm',
+      jumlah_jam: 0,
+      keterangan: 'Seluruh data pada 500 rpm',
+      tipe: 'lolos',
+    },
+    {
+      tahap: 'Beban di luar 1.500–3.000 kW',
+      jumlah_jam: 0,
+      keterangan: 'Beban 1.500–2.200 kW, rata-rata 1.973,6 kW',
+      tipe: 'lolos',
+    },
+    {
+      tahap: 'PCA salah catat',
+      jumlah_jam: 2,
+      keterangan: 'Tertulis 38 bar dan 7,0 bar',
+      tipe: 'ditolak',
+    },
+  ],
+  aturan_validasi: [
+    'Putaran mesin tepat 500 rpm',
+    'Beban operasi ≥ 1.500 kW (rentang 1.500–3.000 kW)',
+    'Tekanan udara bilas (PCA) dalam rentang 0,7–1,7 bar',
+    'Seluruh kolom silinder A1–A9 terisi lengkap',
+  ],
+};
+
+const MOCK_PERIODE_AGUSTUS_2025: PeriodeResponse = {
+  id: '2025-08',
+  periode: 'Agustus 2025',
+  ringkasan: {
+    kritis: 5,
+    waspada: 2,
+    normal: 2,
+  },
+  av: {
+    c1: 1.906,
+    c2: 3.367,
+    c3: 6.175,
+    c4: 5.103,
+  },
+  silinder: [
+    {
+      kode: 'A1',
+      rerata_egt: 482.4,
+      nilai: { c1: 1.03, c2: 3.66, c3: 11.39, c4: 2.71 },
+      status_kriteria: { c1: 'Waspada', c2: 'Normal', c3: 'Kritis', c4: 'Normal' },
+      status: 'Kritis',
+      as: 0.281,
+      urutan: 3,
+      kontribusi: { c1: 21, c2: 0, c3: 79, c4: 0 },
+      pda: { c1: 0.0, c2: 0.086, c3: 0.0, c4: 0.468 },
+      nda: { c1: 0.461, c2: 0.0, c3: 0.844, c4: 0.0 },
+      penyebab_utama: 'Simpangan EGT (δT 11,39%) & Cpk EGT (1,03)',
+      arah_pemeriksaan: 'Periksa injektor',
+      detail_pemeriksaan:
+        'Kontribusi dominan berasal dari simpangan temperatur gas buang δT (79%) dan kapabilitas Cpk EGT (21%), mengindikasikan pola pengabutan atau pembakaran tidak optimal pada nosel injektor.',
+      ringkasan_besaran: 'δT 11,39% — 84% lebih buruk dari rata-rata mesin (NDA 0,844)',
+    },
+    {
+      kode: 'A2',
+      rerata_egt: 455.5,
+      nilai: { c1: 1.23, c2: 2.46, c3: 6.33, c4: 9.27 },
+      status_kriteria: { c1: 'Waspada', c2: 'Normal', c3: 'Waspada', c4: 'Kritis' },
+      status: 'Kritis',
+      as: 0.109,
+      urutan: 2,
+      kontribusi: { c1: 16, c2: 12, c3: 2, c4: 70 },
+      pda: { c1: 0, c2: 0, c3: 0, c4: 0 },
+      nda: { c1: 0.352, c2: 0.27, c3: 0.025, c4: 0.817 },
+      penyebab_utama: 'Simpangan fuel rack (δFR 9,27%)',
+      arah_pemeriksaan: 'Periksa pompa injeksi dan elemen injeksi',
+      detail_pemeriksaan:
+        'Kontribusi dominan berasal dari simpangan posisi fuel rack δFR (70%) dan kapabilitas Cpk FR (12%), mengindikasikan ketidaksesuaian suplai volume bahan bakar pada elemen pompa injeksi.',
+      ringkasan_besaran: 'δFR 9,27% — 82% lebih buruk dari rata-rata mesin (NDA 0,817)',
+    },
+    {
+      kode: 'A3',
+      rerata_egt: 473.1,
+      nilai: { c1: 1.3, c2: 2.47, c3: 9.25, c4: 8.4 },
+      status_kriteria: { c1: 'Waspada', c2: 'Normal', c3: 'Waspada', c4: 'Kritis' },
+      status: 'Kritis',
+      as: 0.0,
+      urutan: 1,
+      kontribusi: { c1: 11, c2: 9, c3: 36, c4: 43 },
+      pda: { c1: 0, c2: 0, c3: 0, c4: 0 },
+      nda: { c1: 0.319, c2: 0.266, c3: 0.498, c4: 0.646 },
+      penyebab_utama: 'Simpangan FR (δFR 8,40%) & EGT (δT 9,25%)',
+      arah_pemeriksaan: 'Periksa injektor serta pompa injeksi dan elemen injeksi',
+      detail_pemeriksaan:
+        'Kontribusi terbagi besar pada subsistem fuel rack (C4 43%, C2 9%) maupun subsistem EGT (C3 36%, C1 11%), sehingga pemeriksaan perlu mencakup kedua sisi injeksi.',
+      ringkasan_besaran:
+        'δFR 8,40% (NDA 0,646) dan δT 9,25% (NDA 0,498) — tertinggal di keempat kriteria',
+    },
+    {
+      kode: 'A4',
+      rerata_egt: 429.4,
+      nilai: { c1: 2.4, c2: 3.53, c3: 1.36, c4: 6.62 },
+      status_kriteria: { c1: 'Normal', c2: 'Normal', c3: 'Normal', c4: 'Kritis' },
+      status: 'Kritis',
+      as: 0.742,
+      urutan: 7,
+      kontribusi: { c1: 0, c2: 0, c3: 0, c4: 100 },
+      pda: { c1: 0.261, c2: 0.048, c3: 0.78, c4: 0.0 },
+      nda: { c1: 0, c2: 0, c3: 0, c4: 0.298 },
+      penyebab_utama: 'Simpangan fuel rack (δFR 6,62%)',
+      arah_pemeriksaan: 'Periksa pompa injeksi dan elemen injeksi',
+      detail_pemeriksaan:
+        'Seluruh kontribusi negatif (100%) berasal dari simpangan fuel rack δFR yang melewati ambang 5%, sementara kriteria EGT berada pada kondisi baik.',
+      ringkasan_besaran: 'δFR 6,62% — 30% lebih buruk dari rata-rata mesin (NDA 0,298)',
+    },
+    {
+      kode: 'A5',
+      rerata_egt: 433.3,
+      nilai: { c1: 2.16, c2: 3.74, c3: 2.22, c4: 1.74 },
+      status_kriteria: { c1: 'Normal', c2: 'Normal', c3: 'Normal', c4: 'Normal' },
+      status: 'Normal',
+      as: 1.0,
+      urutan: 9,
+      kontribusi: { c1: 0, c2: 0, c3: 0, c4: 0 },
+      pda: { c1: 0.132, c2: 0.111, c3: 0.641, c4: 0.658 },
+      nda: { c1: 0, c2: 0, c3: 0, c4: 0 },
+      penyebab_utama: 'Tidak ada penyimpangan ambang',
+      arah_pemeriksaan: 'Tidak diperlukan tindakan korektif (pertahankan pemantauan rutin)',
+      detail_pemeriksaan:
+        'Seluruh kriteria berada di atas solusi rata-rata mesin (NDA = 0 di semua kriteria) dan dalam batas ambang Normal.',
+      ringkasan_besaran: 'Semua kriteria lebih baik dari rata-rata mesin (NDA 0,000)',
+    },
+    {
+      kode: 'A6',
+      rerata_egt: 404.1,
+      nilai: { c1: 1.96, c2: 4.37, c3: 6.67, c4: 4.45 },
+      status_kriteria: { c1: 'Normal', c2: 'Normal', c3: 'Waspada', c4: 'Normal' },
+      status: 'Waspada',
+      as: 0.569,
+      urutan: 5,
+      kontribusi: { c1: 0, c2: 0, c3: 100, c4: 0 },
+      pda: { c1: 0.029, c2: 0.299, c3: 0.0, c4: 0.128 },
+      nda: { c1: 0, c2: 0, c3: 0.08, c4: 0 },
+      penyebab_utama: 'Simpangan EGT (δT 6,67%)',
+      arah_pemeriksaan: 'Periksa injektor',
+      detail_pemeriksaan:
+        'Kontribusi penyebab terpusat pada simpangan EGT δT (100% dari NDA) yang berada pada zona Waspada (5–10%).',
+      ringkasan_besaran: 'δT 6,67% — 8% lebih buruk dari rata-rata mesin (NDA 0,080)',
+    },
+    {
+      kode: 'A7',
+      rerata_egt: 400.0,
+      nilai: { c1: 2.68, c2: 3.67, c3: 7.63, c4: 6.05 },
+      status_kriteria: { c1: 'Normal', c2: 'Normal', c3: 'Waspada', c4: 'Kritis' },
+      status: 'Kritis',
+      as: 0.44,
+      urutan: 4,
+      kontribusi: { c1: 0, c2: 0, c3: 58, c4: 42 },
+      pda: { c1: 0.405, c2: 0.091, c3: 0.0, c4: 0.0 },
+      nda: { c1: 0, c2: 0, c3: 0.235, c4: 0.186 },
+      penyebab_utama: 'Simpangan EGT (δT 7,63%) & FR (δFR 6,05%)',
+      arah_pemeriksaan: 'Periksa injektor serta pompa injeksi dan elemen injeksi',
+      detail_pemeriksaan:
+        'Kontribusi terdistribusi seimbang antara simpangan EGT δT (58%) dan simpangan fuel rack δFR (42%).',
+      ringkasan_besaran:
+        'δT 7,63% (NDA 0,235) dan δFR 6,05% (NDA 0,186) di atas rata-rata simpangan mesin',
+    },
+    {
+      kode: 'A8',
+      rerata_egt: 407.3,
+      nilai: { c1: 2.21, c2: 3.35, c3: 5.93, c4: 4.28 },
+      status_kriteria: { c1: 'Normal', c2: 'Normal', c3: 'Waspada', c4: 'Normal' },
+      status: 'Waspada',
+      as: 0.597,
+      urutan: 6,
+      kontribusi: { c1: 0, c2: 100, c3: 0, c4: 0 },
+      pda: { c1: 0.161, c2: 0.0, c3: 0.039, c4: 0.16 },
+      nda: { c1: 0, c2: 0.004, c3: 0, c4: 0 },
+      penyebab_utama: 'Simpangan EGT (δT 5,93%)',
+      arah_pemeriksaan: 'Periksa injektor (pemantauan terjadwal)',
+      detail_pemeriksaan:
+        'Simpangan EGT δT memasuki ambang Waspada (5,93%), dengan selisih NDA sangat kecil pada kapabilitas fuel rack (NDA 0,004).',
+      ringkasan_besaran: 'δT 5,93% (ambang Waspada) · NDA C2 0,004 terhadap rata-rata mesin',
+    },
+    {
+      kode: 'A9',
+      rerata_egt: 412.2,
+      nilai: { c1: 2.18, c2: 3.04, c3: 4.81, c4: 2.38 },
+      status_kriteria: { c1: 'Normal', c2: 'Normal', c3: 'Normal', c4: 'Normal' },
+      status: 'Normal',
+      as: 0.771,
+      urutan: 8,
+      kontribusi: { c1: 0, c2: 100, c3: 0, c4: 0 },
+      pda: { c1: 0.145, c2: 0.0, c3: 0.221, c4: 0.533 },
+      nda: { c1: 0, c2: 0.096, c3: 0, c4: 0 },
+      penyebab_utama: 'Tidak ada penyimpangan ambang',
+      arah_pemeriksaan: 'Tidak diperlukan tindakan korektif (pertahankan pemantauan rutin)',
+      detail_pemeriksaan:
+        'Seluruh kriteria berada di bawah ambang batas peringatan; variasi kecil C2 terhadap rata-rata mesin (NDA 0,096) masih dalam zona Normal.',
+      ringkasan_besaran: 'Semua kriteria dalam batas Normal (δT 4,81%, δFR 2,38%)',
+    },
+  ],
+};
+
+// Frekuensi & Mingguan dari Bagian 9.4 PRD
+const MOCK_FREKUENSI_PERIODE: Record<
+  KodeSilinder,
+  {
+    dT_ge_5: number;
+    dT_ge_10: number;
+    dFR_ge_5: number;
+    mingguan_dT_10: { label: string; nilai: number }[];
+    mingguan_dFR_5: { label: string; nilai: number }[];
+    keterangan_mingguan: string;
+  }
+> = {
+  A1: {
+    dT_ge_5: 100.0,
+    dT_ge_10: 79.3,
+    dFR_ge_5: 7.1,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 78.7 },
+      { label: 'Minggu 2', nilai: 63.2 },
+      { label: 'Minggu 3', nilai: 57.1 },
+      { label: 'Minggu 4', nilai: 90.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 5.0 },
+      { label: 'Minggu 2', nilai: 8.3 },
+      { label: 'Minggu 3', nilai: 4.8 },
+      { label: 'Minggu 4', nilai: 10.0 },
+    ],
+    keterangan_mingguan: 'Frekuensi mingguan A1 δT ≥ 10%: 78,7% / 63,2% / 57,1% / 90,0%',
+  },
+  A2: {
+    dT_ge_5: 79.3,
+    dT_ge_10: 0.7,
+    dFR_ge_5: 99.3,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 0.0 },
+      { label: 'Minggu 2', nilai: 0.0 },
+      { label: 'Minggu 3', nilai: 0.0 },
+      { label: 'Minggu 4', nilai: 2.5 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 97.5 },
+      { label: 'Minggu 2', nilai: 100.0 },
+      { label: 'Minggu 3', nilai: 100.0 },
+      { label: 'Minggu 4', nilai: 100.0 },
+    ],
+    keterangan_mingguan: 'Dominan pelanggaran δFR ≥ 5% konsisten sepanjang 4 minggu (99,3%)',
+  },
+  A3: {
+    dT_ge_5: 97.9,
+    dT_ge_10: 42.1,
+    dFR_ge_5: 96.4,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 38.5 },
+      { label: 'Minggu 2', nilai: 41.2 },
+      { label: 'Minggu 3', nilai: 38.9 },
+      { label: 'Minggu 4', nilai: 50.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 92.3 },
+      { label: 'Minggu 2', nilai: 97.1 },
+      { label: 'Minggu 3', nilai: 96.8 },
+      { label: 'Minggu 4', nilai: 100.0 },
+    ],
+    keterangan_mingguan: 'Frekuensi A3 δT ≥ 10% minggu terakhir mencapai 50,0%',
+  },
+  A4: {
+    dT_ge_5: 0.7,
+    dT_ge_10: 0.0,
+    dFR_ge_5: 89.3,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 0.0 },
+      { label: 'Minggu 2', nilai: 0.0 },
+      { label: 'Minggu 3', nilai: 0.0 },
+      { label: 'Minggu 4', nilai: 0.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 82.5 },
+      { label: 'Minggu 2', nilai: 88.2 },
+      { label: 'Minggu 3', nilai: 91.4 },
+      { label: 'Minggu 4', nilai: 95.0 },
+    ],
+    keterangan_mingguan: 'δT tetap Normal (0,0% ≥ 10%), namun δFR ≥ 5% meningkat hingga 95,0%',
+  },
+  A5: {
+    dT_ge_5: 5.0,
+    dT_ge_10: 0.0,
+    dFR_ge_5: 5.0,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 0.0 },
+      { label: 'Minggu 2', nilai: 0.0 },
+      { label: 'Minggu 3', nilai: 0.0 },
+      { label: 'Minggu 4', nilai: 0.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 5.0 },
+      { label: 'Minggu 2', nilai: 5.9 },
+      { label: 'Minggu 3', nilai: 4.8 },
+      { label: 'Minggu 4', nilai: 4.5 },
+    ],
+    keterangan_mingguan: 'Stabil dalam zona Normal sepanjang periode operasi',
+  },
+  A6: {
+    dT_ge_5: 80.0,
+    dT_ge_10: 7.1,
+    dFR_ge_5: 43.6,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 5.0 },
+      { label: 'Minggu 2', nilai: 8.8 },
+      { label: 'Minggu 3', nilai: 4.8 },
+      { label: 'Minggu 4', nilai: 10.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 40.0 },
+      { label: 'Minggu 2', nilai: 44.1 },
+      { label: 'Minggu 3', nilai: 42.9 },
+      { label: 'Minggu 4', nilai: 47.5 },
+    ],
+    keterangan_mingguan: 'Mayoritas jam operasi berada pada rentang Waspada δT 5–10%',
+  },
+  A7: {
+    dT_ge_5: 98.6,
+    dT_ge_10: 4.3,
+    dFR_ge_5: 77.9,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 2.5 },
+      { label: 'Minggu 2', nilai: 5.9 },
+      { label: 'Minggu 3', nilai: 4.8 },
+      { label: 'Minggu 4', nilai: 4.5 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 72.5 },
+      { label: 'Minggu 2', nilai: 76.5 },
+      { label: 'Minggu 3', nilai: 81.0 },
+      { label: 'Minggu 4', nilai: 82.5 },
+    ],
+    keterangan_mingguan: 'Kombinasi δT Waspada (98,6% ≥ 5%) dan δFR Kritis (77,9% ≥ 5%)',
+  },
+  A8: {
+    dT_ge_5: 77.9,
+    dT_ge_10: 0.7,
+    dFR_ge_5: 39.3,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 0.0 },
+      { label: 'Minggu 2', nilai: 0.0 },
+      { label: 'Minggu 3', nilai: 2.4 },
+      { label: 'Minggu 4', nilai: 0.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 37.5 },
+      { label: 'Minggu 2', nilai: 41.2 },
+      { label: 'Minggu 3', nilai: 38.1 },
+      { label: 'Minggu 4', nilai: 40.0 },
+    ],
+    keterangan_mingguan: 'Simpangan δT stabil di zona Waspada bawah (5–6%)',
+  },
+  A9: {
+    dT_ge_5: 52.1,
+    dT_ge_10: 0.0,
+    dFR_ge_5: 4.3,
+    mingguan_dT_10: [
+      { label: 'Minggu 1', nilai: 0.0 },
+      { label: 'Minggu 2', nilai: 0.0 },
+      { label: 'Minggu 3', nilai: 0.0 },
+      { label: 'Minggu 4', nilai: 0.0 },
+    ],
+    mingguan_dFR_5: [
+      { label: 'Minggu 1', nilai: 5.0 },
+      { label: 'Minggu 2', nilai: 2.9 },
+      { label: 'Minggu 3', nilai: 4.8 },
+      { label: 'Minggu 4', nilai: 4.5 },
+    ],
+    keterangan_mingguan: 'Tidak ada pelanggaran ambang Kritis sepanjang bulan Agustus 2025',
+  },
+};
+
+// 21 Tanggal operasi Agustus 2025 sesuai Bagian 9.4 PRD:
+// 1–6, 8–13, 16, 19, 20, 23–28
+const TANGGAL_OPERASI_AGUSTUS: { tanggal: string; label: string }[] = [
+  { tanggal: '2025-08-01', label: '01 Agu' },
+  { tanggal: '2025-08-02', label: '02 Agu' },
+  { tanggal: '2025-08-03', label: '03 Agu' },
+  { tanggal: '2025-08-04', label: '04 Agu' },
+  { tanggal: '2025-08-05', label: '05 Agu' },
+  { tanggal: '2025-08-06', label: '06 Agu' },
+  { tanggal: '2025-08-08', label: '08 Agu' },
+  { tanggal: '2025-08-09', label: '09 Agu' },
+  { tanggal: '2025-08-10', label: '10 Agu' },
+  { tanggal: '2025-08-11', label: '11 Agu' },
+  { tanggal: '2025-08-12', label: '12 Agu' },
+  { tanggal: '2025-08-13', label: '13 Agu' },
+  { tanggal: '2025-08-16', label: '16 Agu' },
+  { tanggal: '2025-08-19', label: '19 Agu' },
+  { tanggal: '2025-08-20', label: '20 Agu' },
+  { tanggal: '2025-08-23', label: '23 Agu' },
+  { tanggal: '2025-08-24', label: '24 Agu' },
+  { tanggal: '2025-08-25', label: '25 Agu' },
+  { tanggal: '2025-08-26', label: '26 Agu' },
+  { tanggal: '2025-08-27', label: '27 Agu' },
+  { tanggal: '2025-08-28', label: '28 Agu' },
+];
+
+// Data contoh harian (tren_harian.json) dengan titik pasti:
+// A1 dT: 2025-08-25 = 12,0% dan 2025-08-28 = 14,3%
+const SERI_HARIAN_RAW: Record<KodeSilinder, { dT: number[]; dFR: number[] }> = {
+  A1: {
+    dT: [
+      10.4, 10.8, 11.1, 10.6, 11.3, 10.9, 10.2, 10.5, 10.8, 10.3, 10.1, 9.9, 10.4, 10.7, 11.2,
+      11.6, 11.8, 12.0, 12.9, 13.6, 14.3,
+    ],
+    dFR: [
+      2.4, 2.6, 2.5, 2.8, 3.1, 2.7, 2.5, 2.9, 3.2, 2.6, 2.4, 2.3, 2.7, 2.5, 2.8, 2.6, 2.9, 2.7,
+      2.8, 3.0, 2.9,
+    ],
+  },
+  A2: {
+    dT: [
+      6.1, 6.3, 6.2, 6.4, 6.5, 6.2, 6.0, 6.3, 6.4, 6.2, 6.1, 6.3, 6.4, 6.2, 6.5, 6.3, 6.4, 6.6,
+      6.4, 6.5, 6.6,
+    ],
+    dFR: [
+      8.6, 8.8, 8.9, 9.0, 9.1, 8.9, 9.0, 9.2, 9.3, 9.1, 9.2, 9.4, 9.3, 9.5, 9.4, 9.5, 9.6, 9.5,
+      9.6, 9.7, 9.8,
+    ],
+  },
+  A3: {
+    dT: [
+      8.6, 8.8, 9.0, 8.9, 9.1, 9.2, 9.0, 9.3, 9.1, 9.2, 9.4, 9.1, 9.3, 9.2, 9.5, 9.4, 9.6, 9.5,
+      9.7, 9.8, 10.1,
+    ],
+    dFR: [
+      7.9, 8.0, 8.1, 8.2, 8.1, 8.3, 8.2, 8.4, 8.3, 8.5, 8.4, 8.3, 8.5, 8.4, 8.6, 8.5, 8.6, 8.7,
+      8.6, 8.8, 8.9,
+    ],
+  },
+  A4: {
+    dT: [
+      1.3, 1.4, 1.2, 1.5, 1.3, 1.4, 1.2, 1.3, 1.4, 1.5, 1.3, 1.2, 1.4, 1.3, 1.5, 1.4, 1.3, 1.4,
+      1.3, 1.4, 1.5,
+    ],
+    dFR: [
+      5.9, 6.1, 6.2, 6.0, 6.3, 6.4, 6.3, 6.5, 6.6, 6.5, 6.7, 6.6, 6.8, 6.7, 6.9, 6.8, 7.0, 6.9,
+      7.1, 7.0, 7.2,
+    ],
+  },
+  A5: {
+    dT: [
+      2.1, 2.3, 2.2, 2.0, 2.4, 2.2, 2.1, 2.3, 2.2, 2.1, 2.0, 2.2, 2.3, 2.1, 2.2, 2.4, 2.2, 2.1,
+      2.3, 2.2, 2.1,
+    ],
+    dFR: [
+      1.7, 1.8, 1.6, 1.9, 1.7, 1.8, 1.6, 1.7, 1.8, 1.7, 1.6, 1.8, 1.7, 1.8, 1.7, 1.9, 1.7, 1.6,
+      1.8, 1.7, 1.7,
+    ],
+  },
+  A6: {
+    dT: [
+      6.3, 6.5, 6.6, 6.4, 6.7, 6.8, 6.5, 6.7, 6.9, 6.6, 6.5, 6.7, 6.8, 6.6, 6.7, 6.8, 6.7, 6.9,
+      6.8, 6.7, 6.8,
+    ],
+    dFR: [
+      4.2, 4.4, 4.3, 4.5, 4.4, 4.6, 4.3, 4.5, 4.4, 4.3, 4.5, 4.4, 4.5, 4.4, 4.6, 4.5, 4.4, 4.6,
+      4.5, 4.6, 4.5,
+    ],
+  },
+  A7: {
+    dT: [
+      7.2, 7.4, 7.5, 7.3, 7.6, 7.7, 7.5, 7.8, 7.6, 7.5, 7.7, 7.6, 7.8, 7.7, 7.9, 7.7, 7.8, 7.9,
+      7.7, 7.8, 7.9,
+    ],
+    dFR: [
+      5.6, 5.8, 5.7, 5.9, 6.0, 5.9, 5.8, 6.1, 6.0, 5.9, 6.1, 6.0, 6.2, 6.1, 6.2, 6.1, 6.3, 6.2,
+      6.3, 6.2, 6.4,
+    ],
+  },
+  A8: {
+    dT: [
+      5.8, 5.9, 6.0, 5.8, 6.1, 5.9, 5.8, 6.0, 5.9, 5.8, 6.0, 5.9, 6.1, 5.9, 6.0, 5.9, 6.0, 5.8,
+      5.9, 6.0, 5.9,
+    ],
+    dFR: [
+      4.1, 4.3, 4.2, 4.4, 4.2, 4.3, 4.2, 4.4, 4.3, 4.2, 4.3, 4.2, 4.4, 4.3, 4.2, 4.3, 4.2, 4.4,
+      4.3, 4.2, 4.3,
+    ],
+  },
+  A9: {
+    dT: [
+      4.7, 4.9, 4.8, 4.7, 4.9, 4.8, 4.7, 4.8, 4.9, 4.7, 4.8, 4.9, 4.8, 4.7, 4.8, 4.9, 4.8, 4.7,
+      4.8, 4.9, 4.8,
+    ],
+    dFR: [
+      2.3, 2.4, 2.3, 2.5, 2.4, 2.3, 2.4, 2.3, 2.5, 2.4, 2.3, 2.4, 2.3, 2.4, 2.5, 2.4, 2.3, 2.4,
+      2.3, 2.4, 2.4,
+    ],
+  },
+};
+
+const TREN_HARIAN_MAP: Record<KodeSilinder, TitikTrenHarian[]> = (
+  ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9'] as KodeSilinder[]
+).reduce((acc, kode) => {
+  acc[kode] = TANGGAL_OPERASI_AGUSTUS.map((tgl, idx) => ({
+    tanggal: tgl.tanggal,
+    label_tanggal: tgl.label,
+    dT: SERI_HARIAN_RAW[kode].dT[idx],
+    dFR: SERI_HARIAN_RAW[kode].dFR[idx],
+  }));
+  return acc;
+}, {} as Record<KodeSilinder, TitikTrenHarian[]>);
+
+const INITIAL_CATATAN_TINDAKAN: CatatanTindakanItem[] = [
+  {
+    id: 'TDK-001',
+    silinder: 'A3',
+    periode: 'Agustus 2025',
+    temuan:
+      'Skor EDAS terendah (AS 0,000; Urutan 1) dengan pelanggaran δFR 8,40% dan δT 9,25% (minggu terakhir δT ≥ 10% mencapai 50,0%).',
+    tindakan:
+      'Jadwalkan pemeriksaan tekanan pembukaan nosel injektor serta kalibrasi elemen dan linkage pompa injeksi silinder A3 saat jendela pemeliharaan terdekat.',
+    tanggal: '2025-08-29',
+    nama_engineer: 'R. Pratama',
+    status: 'Direncanakan',
+  },
+  {
+    id: 'TDK-002',
+    silinder: 'A1',
+    periode: 'Agustus 2025',
+    temuan:
+      'Simpangan EGT δT mencapai 11,39% (Kritis) dengan tren harian meningkat pada akhir bulan hingga 14,3% pada 28 Agustus 2025.',
+    tindakan:
+      'Lakukan pengujian pola semprot injektor silinder A1 dan periksa kebersihan lubang nosel.',
+    tanggal: '2025-08-29',
+    nama_engineer: 'D. Saputra',
+    status: 'Direncanakan',
+  },
+  {
+    id: 'TDK-003',
+    silinder: 'A4',
+    periode: 'Agustus 2025',
+    temuan:
+      'Status Kritis akibat δFR 6,62% (89,3% jam operasi di atas 5%), sementara parameter EGT tetap Normal.',
+    tindakan:
+      'Pemeriksaan titik nol (zero index) fuel rack dan kelancaran gerak plunger pompa injeksi A4 telah dilakukan.',
+    tanggal: '2025-08-26',
+    nama_engineer: 'R. Pratama',
+    status: 'Selesai',
+  },
+];
+
+const INITIAL_PENGATURAN: PengaturanResponse = {
+  ambang: [
+    {
+      kriteria: 'C1',
+      nama: 'Kapabilitas EGT (Cpk)',
+      satuan: 'indeks',
+      tipe: 'Benefit',
+      normal: '≥ 1,33',
+      waspada: '1,00 – 1,33',
+      kritis: '< 1,00',
+    },
+    {
+      kriteria: 'C2',
+      nama: 'Kapabilitas Fuel Rack (Cpk)',
+      satuan: 'indeks',
+      tipe: 'Benefit',
+      normal: '≥ 1,33',
+      waspada: '1,00 – 1,33',
+      kritis: '< 1,00',
+    },
+    {
+      kriteria: 'C3',
+      nama: 'Simpangan EGT (δT)',
+      satuan: '%',
+      tipe: 'Cost',
+      normal: '< 5,0%',
+      waspada: '5,0 – 10,0%',
+      kritis: '≥ 10,0%',
+    },
+    {
+      kriteria: 'C4',
+      nama: 'Simpangan Fuel Rack (δFR)',
+      satuan: '%',
+      tipe: 'Cost',
+      normal: '< 5,0%',
+      waspada: '— (langsung Kritis)',
+      kritis: '≥ 5,0%',
+    },
+  ],
+  bobot: {
+    c1: 0.17,
+    c2: 0.16,
+    c3: 0.35,
+    c4: 0.32,
+  },
+  batas_operasi: {
+    egt: '350–530 °C',
+    fuel_rack: '14–47 mm',
+  },
+  riwayat: [
+    {
+      id: 'CFG-001',
+      pengguna: 'Team Leader (Baseline)',
+      waktu: '01 Agu 2025, 08:00',
+      perubahan:
+        'Penetapan bobot awal C1=0,17; C2=0,16; C3=0,35; C4=0,32 serta ambang kriteria standar evaluasi periode.',
+    },
+  ],
+};
+
+/* ============================================================================
+ * 3. FORMATTER ANGKA INDONESIA (Merepresentasikan src/lib/format.ts)
+ *    Koma desimal (11,39), titik ribuan (1.973,6), satuan selalu ditampilkan.
+ * ============================================================================ */
+
+function formatAngkaID(nilai: number, desimal = 2): string {
+  return new Intl.NumberFormat('id-ID', {
+    minimumFractionDigits: desimal,
+    maximumFractionDigits: desimal,
+  }).format(nilai);
+}
+
+function formatBulatID(nilai: number): string {
+  return new Intl.NumberFormat('id-ID', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(nilai);
+}
+
+/* ============================================================================
+ * 4. MOCK API LAYER (Merepresentasikan src/api/client.ts)
+ *    Mengikuti kontrak endpoint Bagian 8 PRD secara persis.
+ * ============================================================================ */
+
+const mockApi = {
+  // POST /api/unggah
+  async postUnggah(namaBerkas?: string): Promise<HasilUnggahResponse> {
+    return {
+      ...MOCK_HASIL_UNGGAH,
+      nama_berkas: namaBerkas || MOCK_HASIL_UNGGAH.nama_berkas,
+    };
+  },
+
+  // GET /api/periode/{id}
+  async getPeriode(id: string): Promise<PeriodeResponse> {
+    if (id === '2025-08') {
+      return MOCK_PERIODE_AGUSTUS_2025;
+    }
+    return MOCK_PERIODE_AGUSTUS_2025;
+  },
+
+  // GET /api/silinder/{kode}?periode=
+  async getSilinderDetail(kode: KodeSilinder, _periode = '2025-08'): Promise<DataSilinderPeriode> {
+    const found = MOCK_PERIODE_AGUSTUS_2025.silinder.find((s) => s.kode === kode);
+    return found || MOCK_PERIODE_AGUSTUS_2025.silinder[0];
+  },
+
+  // GET /api/tren/{kode}?kriteria=dT|dFR
+  async getTrenSilinder(
+    kode: KodeSilinder,
+    kriteria: 'dT' | 'dFR'
+  ): Promise<TrenSilinderResponse> {
+    const harian = TREN_HARIAN_MAP[kode];
+    const freq = MOCK_FREKUENSI_PERIODE[kode];
+    const titikAkhir = harian[harian.length - 1];
+    const titikAwal = harian[0];
+    const nilaiTerakhir = kriteria === 'dT' ? titikAkhir.dT : titikAkhir.dFR;
+    const nilaiAwal = kriteria === 'dT' ? titikAwal.dT : titikAwal.dFR;
+    const selisih = Number((nilaiTerakhir - nilaiAwal).toFixed(2));
+
+    let arah_tren: 'Naik' | 'Turun' | 'Stabil' = 'Stabil';
+    if (selisih >= 0.4) arah_tren = 'Naik';
+    else if (selisih <= -0.4) arah_tren = 'Turun';
+
+    return {
+      kode,
+      kriteria,
+      harian,
+      semua_silinder: TREN_HARIAN_MAP,
+      frekuensi: {
+        dT_ge_5: freq.dT_ge_5,
+        dT_ge_10: freq.dT_ge_10,
+        dFR_ge_5: freq.dFR_ge_5,
+        mingguan: kriteria === 'dT' ? freq.mingguan_dT_10 : freq.mingguan_dFR_5,
+        keterangan_mingguan: freq.keterangan_mingguan,
+      },
+      nilai_terakhir: nilaiTerakhir,
+      tanggal_terakhir: '28 Agustus 2025',
+      arah_tren,
+      selisih_awal_akhir: selisih,
+    };
+  },
+};
+
+/* ============================================================================
+ * 5. KOMPONEN UI REUSABLE (Merepresentasikan src/components/*)
+ * ============================================================================ */
+
+// Warna status konsisten: Normal (#2E7D32), Waspada (#ED8C00), Kritis (#C62828) + teks wajib
+const STATUS_STYLES: Record<
+  StatusKondisi,
+  {
+    hex: string;
+    badgeBg: string;
+    badgeText: string;
+    badgeBorder: string;
+    dotColor: string;
+    cardBorder: string;
+    cardBg: string;
+  }
+> = {
+  Normal: {
+    hex: '#2E7D32',
+    badgeBg: 'bg-[#2E7D32]/10',
+    badgeText: 'text-[#2E7D32]',
+    badgeBorder: 'border-[#2E7D32]/30',
+    dotColor: 'bg-[#2E7D32]',
+    cardBorder: 'border-[#2E7D32]/40',
+    cardBg: 'bg-[#2E7D32]/[0.04]',
+  },
+  Waspada: {
+    hex: '#ED8C00',
+    badgeBg: 'bg-[#ED8C00]/15',
+    badgeText: 'text-[#B86800]',
+    badgeBorder: 'border-[#ED8C00]/40',
+    dotColor: 'bg-[#ED8C00]',
+    cardBorder: 'border-[#ED8C00]/50',
+    cardBg: 'bg-[#ED8C00]/[0.06]',
+  },
+  Kritis: {
+    hex: '#C62828',
+    badgeBg: 'bg-[#C62828]/10',
+    badgeText: 'text-[#C62828]',
+    badgeBorder: 'border-[#C62828]/35',
+    dotColor: 'bg-[#C62828]',
+    cardBorder: 'border-[#C62828]/45',
+    cardBg: 'bg-[#C62828]/[0.05]',
+  },
+};
+
+function StatusBadge({
+  status,
+  size = 'sm',
+}: {
+  status: StatusKondisi;
+  size?: 'xs' | 'sm' | 'md';
+}) {
+  const s = STATUS_STYLES[status];
+  const sizeClass =
+    size === 'xs'
+      ? 'px-2 py-0.5 text-[11px] gap-1'
+      : size === 'md'
+      ? 'px-3 py-1 text-xs gap-1.5'
+      : 'px-2.5 py-0.5 text-xs gap-1.5';
+
+  return (
+    <span
+      className={`inline-flex items-center font-semibold rounded-full border ${s.badgeBg} ${s.badgeText} ${s.badgeBorder} ${sizeClass}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${s.dotColor}`} />
+      <span>{status}</span>
+    </span>
+  );
+}
+
+function InfoTooltip({ title, content }: { title: string; content: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      className="relative inline-flex items-center"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((prev) => !prev);
+        }}
+        aria-label={title}
+        className="inline-flex items-center justify-center text-slate-400 hover:text-[#1F3A5F] focus:outline-none p-0.5 rounded"
+      >
+        <HelpCircle className="w-3.5 h-3.5" />
+      </button>
+      {open && (
+        <div
+          role="tooltip"
+          className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-3 rounded-lg bg-slate-900 text-white text-xs shadow-xl leading-relaxed pointer-events-none"
+        >
+          <div className="font-semibold text-slate-100 mb-1">{title}</div>
+          <div className="text-slate-300">{content}</div>
+          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Grafik Tren Simpangan Harian SVG Interaktif
+ * - Menampilkan 9 silinder (silinder aktif tebal #1F3A5F, 8 silinder lain abu-abu tipis)
+ * - Garis ambang putus-putus 5% (oranye #ED8C00) dan 10% (merah #C62828)
+ * - Label kecil "data contoh" sesuai Bagian 9.4 PRD
+ */
+function TrendLineChart({
+  data,
+  selectedCylinder,
+  kriteria,
+  onSelectCylinder,
+}: {
+  data: TrenSilinderResponse;
+  selectedCylinder: KodeSilinder;
+  kriteria: 'dT' | 'dFR';
+  onSelectCylinder: (kode: KodeSilinder) => void;
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hoveredOtherCyl, setHoveredOtherCyl] = useState<KodeSilinder | null>(null);
+
+  const allCylinders: KodeSilinder[] = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9'];
+  const dates = data.harian;
+
+  // Hitung nilai maksimum sumbu Y agar garis ambang 10% dan titik 14,3% selalu terbaca lega
+  const maxVal = useMemo(() => {
+    let m = kriteria === 'dT' ? 15 : 12;
+    allCylinders.forEach((k) => {
+      data.semua_silinder[k].forEach((pt) => {
+        const v = kriteria === 'dT' ? pt.dT : pt.dFR;
+        if (v > m) m = Math.ceil(v + 1);
+      });
+    });
+    return m;
+  }, [data, kriteria]);
+
+  const width = 860;
+  const height = 340;
+  const padLeft = 52;
+  const padRight = 24;
+  const padTop = 28;
+  const padBottom = 56;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const getX = (index: number) =>
+    padLeft + (index / Math.max(1, dates.length - 1)) * plotW;
+  const getY = (val: number) => padTop + plotH - (val / maxVal) * plotH;
+
+  const yTicks = kriteria === 'dT' ? [0, 2.5, 5, 7.5, 10, 12.5, 15] : [0, 2, 4, 5, 8, 10, 12];
+
+  const buildPath = (kode: KodeSilinder) => {
+    const series = data.semua_silinder[kode];
+    return series
+      .map((pt, i) => {
+        const val = kriteria === 'dT' ? pt.dT : pt.dFR;
+        return `${i === 0 ? 'M' : 'L'} ${getX(i).toFixed(1)} ${getY(val).toFixed(1)}`;
+      })
+      .join(' ');
+  };
+
+  const activeSeries = data.harian;
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h3 className="text-base font-semibold text-slate-900">
+              Grafik Simpangan Harian {kriteria === 'dT' ? 'EGT (δT)' : 'Fuel Rack (δFR)'} —
+              Silinder {selectedCylinder}
+            </h3>
+            {/* Label wajib sesuai Bagian 9.4 PRD */}
+            <span className="px-2 py-0.5 text-[11px] font-medium rounded bg-slate-100 text-slate-600 border border-slate-300">
+              data contoh
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            21 hari operasi Agustus 2025 · Garis biru tebal menunjukkan silinder terpilih, garis
+            abu-abu menunjukkan 8 silinder pembanding.
+          </p>
+        </div>
+
+        {/* Legenda ringkas */}
+        <div className="flex flex-wrap items-center gap-4 text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="w-5 h-1 rounded bg-[#1F3A5F] inline-block" />
+            <span className="font-semibold text-slate-800">Silinder {selectedCylinder}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-5 h-0.5 bg-slate-300 inline-block" />
+            <span className="text-slate-500">
+              {hoveredOtherCyl ? `Silinder ${hoveredOtherCyl} (klik untuk pilih)` : 'Silinder lain'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-5 border-t-2 border-dashed border-[#ED8C00] inline-block" />
+            <span className="text-[#B86800] font-medium">
+              Ambang 5,0% ({kriteria === 'dT' ? 'Waspada' : 'Kritis'})
+            </span>
+          </div>
+          {kriteria === 'dT' && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-5 border-t-2 border-dashed border-[#C62828] inline-block" />
+              <span className="text-[#C62828] font-medium">Ambang 10,0% (Kritis)</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Area SVG Responsif */}
+      <div className="relative w-full overflow-x-auto">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-auto select-none"
+          role="img"
+          aria-label={`Grafik tren simpangan harian ${selectedCylinder}`}
+        >
+          {/* Zona latar ambang */}
+          {kriteria === 'dT' ? (
+            <>
+              <rect
+                x={padLeft}
+                y={getY(maxVal)}
+                width={plotW}
+                height={getY(10) - getY(maxVal)}
+                fill="#C62828"
+                fillOpacity={0.035}
+              />
+              <rect
+                x={padLeft}
+                y={getY(10)}
+                width={plotW}
+                height={getY(5) - getY(10)}
+                fill="#ED8C00"
+                fillOpacity={0.035}
+              />
+            </>
+          ) : (
+            <rect
+              x={padLeft}
+              y={getY(maxVal)}
+              width={plotW}
+              height={getY(5) - getY(maxVal)}
+              fill="#C62828"
+              fillOpacity={0.035}
+            />
+          )}
+
+          {/* Grid horizontal & label sumbu Y */}
+          {yTicks.map((tick) => {
+            const y = getY(tick);
+            return (
+              <g key={tick}>
+                <line
+                  x1={padLeft}
+                  y1={y}
+                  x2={width - padRight}
+                  y2={y}
+                  stroke="#E2E8F0"
+                  strokeWidth={1}
+                />
+                <text
+                  x={padLeft - 8}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="fill-slate-500 text-[11px] font-mono"
+                >
+                  {formatAngkaID(tick, tick % 1 === 0 ? 0 : 1)}%
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Garis Ambang 5% (Oranye #ED8C00) */}
+          <line
+            x1={padLeft}
+            y1={getY(5)}
+            x2={width - padRight}
+            y2={getY(5)}
+            stroke="#ED8C00"
+            strokeWidth={1.75}
+            strokeDasharray="6 4"
+          />
+          <text
+            x={width - padRight - 4}
+            y={getY(5) - 5}
+            textAnchor="end"
+            className="fill-[#B86800] text-[10px] font-semibold"
+          >
+            Ambang 5,0%
+          </text>
+
+          {/* Garis Ambang 10% (Merah #C62828) */}
+          {kriteria === 'dT' && (
+            <>
+              <line
+                x1={padLeft}
+                y1={getY(10)}
+                x2={width - padRight}
+                y2={getY(10)}
+                stroke="#C62828"
+                strokeWidth={1.75}
+                strokeDasharray="6 4"
+              />
+              <text
+                x={width - padRight - 4}
+                y={getY(10) - 5}
+                textAnchor="end"
+                className="fill-[#C62828] text-[10px] font-semibold"
+              >
+                Ambang 10,0%
+              </text>
+            </>
+          )}
+
+          {/* Garis 8 silinder pembanding (abu-abu tipis) */}
+          {allCylinders
+            .filter((k) => k !== selectedCylinder)
+            .map((kode) => {
+              const isHovered = hoveredOtherCyl === kode;
+              return (
+                <path
+                  key={kode}
+                  d={buildPath(kode)}
+                  fill="none"
+                  stroke={isHovered ? '#64748B' : '#CBD5E1'}
+                  strokeWidth={isHovered ? 2.2 : 1.25}
+                  className="cursor-pointer transition-colors"
+                  onMouseEnter={() => setHoveredOtherCyl(kode)}
+                  onMouseLeave={() => setHoveredOtherCyl(null)}
+                  onClick={() => onSelectCylinder(kode)}
+                />
+              );
+            })}
+
+          {/* Garis silinder terpilih (tebal biru tua #1F3A5F) */}
+          <path
+            d={buildPath(selectedCylinder)}
+            fill="none"
+            stroke="#1F3A5F"
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {/* Garis bantu vertikal saat hover */}
+          {hoverIdx !== null && (
+            <line
+              x1={getX(hoverIdx)}
+              y1={padTop}
+              x2={getX(hoverIdx)}
+              y2={padTop + plotH}
+              stroke="#94A3B8"
+              strokeWidth={1}
+              strokeDasharray="3 3"
+            />
+          )}
+
+          {/* Titik data silinder terpilih & label sumbu X */}
+          {activeSeries.map((pt, i) => {
+            const val = kriteria === 'dT' ? pt.dT : pt.dFR;
+            const cx = getX(i);
+            const cy = getY(val);
+            const isHovered = hoverIdx === i;
+            const isKeyPoint =
+              selectedCylinder === 'A1' &&
+              kriteria === 'dT' &&
+              (pt.tanggal === '2025-08-25' || pt.tanggal === '2025-08-28');
+
+            return (
+              <g key={pt.tanggal}>
+                {/* Label tanggal sumbu X */}
+                <text
+                  x={cx}
+                  y={padTop + plotH + 18}
+                  textAnchor="end"
+                  transform={`rotate(-35 ${cx} ${padTop + plotH + 18})`}
+                  className={`text-[10px] ${
+                    isHovered ? 'fill-[#1F3A5F] font-bold' : 'fill-slate-500'
+                  }`}
+                >
+                  {pt.label_tanggal}
+                </text>
+
+                {/* Titik penanda */}
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={isHovered ? 5.5 : isKeyPoint ? 4.5 : 3.2}
+                  fill={isKeyPoint ? '#C62828' : '#1F3A5F'}
+                  stroke="#FFFFFF"
+                  strokeWidth={1.5}
+                />
+
+                {/* Label nilai langsung pada dua titik acuan pasti A1 (25 Agu & 28 Agu) */}
+                {isKeyPoint && (
+                  <g>
+                    <rect
+                      x={cx - 24}
+                      y={cy - 23}
+                      width={48}
+                      height={16}
+                      rx={4}
+                      fill="#1F3A5F"
+                    />
+                    <text
+                      x={cx}
+                      y={cy - 12}
+                      textAnchor="middle"
+                      className="fill-white text-[10px] font-semibold"
+                    >
+                      {formatAngkaID(val, 1)}%
+                    </text>
+                  </g>
+                )}
+
+                {/* Area tangkap interaksi mouse/sentuh */}
+                <rect
+                  x={cx - plotW / dates.length / 2}
+                  y={padTop}
+                  width={plotW / dates.length}
+                  height={plotH}
+                  fill="transparent"
+                  className="cursor-crosshair"
+                  onMouseEnter={() => setHoverIdx(i)}
+                  onMouseLeave={() => setHoverIdx(null)}
+                />
+              </g>
+            );
+          })}
+        </svg>
+
+        {/* Tooltip mengambang saat hover tanggal */}
+        {hoverIdx !== null && activeSeries[hoverIdx] && (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-lg bg-slate-900 text-white text-xs">
+            <div className="flex items-center gap-3">
+              <span className="font-semibold text-slate-200">
+                Tanggal: {activeSeries[hoverIdx].tanggal}
+              </span>
+              <span className="px-2 py-0.5 rounded bg-[#1F3A5F] border border-blue-400/30 font-semibold">
+                Silinder {selectedCylinder}:{' '}
+                {formatAngkaID(
+                  kriteria === 'dT'
+                    ? activeSeries[hoverIdx].dT
+                    : activeSeries[hoverIdx].dFR,
+                  1
+                )}
+                %
+              </span>
+            </div>
+            <span className="text-slate-400">
+              {kriteria === 'dT'
+                ? 'Ambang Waspada 5,0% · Kritis 10,0%'
+                : 'Ambang Kritis 5,0%'}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * 6. HALAMAN-HALAMAN APLIKASI (Merepresentasikan src/pages/*)
+ * ============================================================================ */
+
+/**
+ * 7.2 DASBOR PERIODE (KF-03, KF-04) — Layar Terpenting
+ */
+function DasborPeriodePage({
+  dataPeriode,
+  onSelectSilinder,
+  onNavigate,
+}: {
+  dataPeriode: PeriodeResponse;
+  onSelectSilinder: (kode: KodeSilinder) => void;
+  onNavigate: (page: HalamanAktif) => void;
+}) {
+  // Urutkan berdasarkan AS terkecil (Urutan 1 = paling tertinggal)
+  const daftarPrioritas = useMemo(
+    () => [...dataPeriode.silinder].sort((a, b) => a.urutan - b.urutan),
+    [dataPeriode]
+  );
+
+  return (
+    <div className="space-y-5">
+      {/* a. Banner peringatan tingkat mesin (merah muda) */}
+      <div className="rounded-xl border border-[#C62828]/30 bg-[#FFF1F2] px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-xs">
+        <div className="flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-lg bg-[#C62828]/15 text-[#C62828] flex items-center justify-center shrink-0 mt-0.5">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-[#881337]">
+              {dataPeriode.ringkasan.kritis + dataPeriode.ringkasan.waspada} dari 9 silinder perlu
+              perhatian — {dataPeriode.ringkasan.kritis} Kritis, {dataPeriode.ringkasan.waspada}{' '}
+              Waspada, {dataPeriode.ringkasan.normal} Normal
+            </h2>
+            <p className="text-xs text-[#9F1239] mt-0.5 font-medium">
+              Seluruh pembacaan masih di dalam batas alarm check sheet.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => onNavigate('unggah')}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition-colors"
+          >
+            Ringkasan Validasi Data
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('tren')}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#1F3A5F] text-white hover:bg-[#162B47] transition-colors"
+          >
+            Lihat Tren Harian
+          </button>
+        </div>
+      </div>
+
+      {/* b. Peta Mesin: 9 kotak silinder berjajar A1–A9 (seperti mesin segaris) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+              Peta Kondisi Mesin Segaris (Silinder A1–A9)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Klik kotak silinder untuk melihat rincian 4 kriteria, kontribusi penyebab, dan arah
+              pemeriksaan.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-slate-600">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#C62828]" /> Kritis (5)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#ED8C00]" /> Waspada (2)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#2E7D32]" /> Normal (2)
+            </span>
+          </div>
+        </div>
+
+        {/* Rangka blok mesin segaris */}
+        <div className="rounded-xl bg-slate-100/80 border border-slate-200/90 p-3.5">
+          <div className="flex items-center justify-between text-[11px] font-medium text-slate-500 mb-2.5 px-1">
+            <span>Sisi Bebas (Free End)</span>
+            <span className="uppercase tracking-wider text-slate-400">
+              Susunan 9 Silinder Segaris · Periode {dataPeriode.periode}
+            </span>
+            <span>Sisi Roda Gila (Flywheel End)</span>
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-2.5">
+            {dataPeriode.silinder.map((sil) => {
+              const st = STATUS_STYLES[sil.status];
+              return (
+                <button
+                  key={sil.kode}
+                  type="button"
+                  onClick={() => onSelectSilinder(sil.kode)}
+                  className={`group relative rounded-xl border-2 bg-white p-3 text-center transition-all hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#1F3A5F] ${st.cardBorder}`}
+                >
+                  {/* Strip warna status di bagian atas */}
+                  <div
+                    className="h-1.5 w-full rounded-full mb-2.5"
+                    style={{ backgroundColor: st.hex }}
+                  />
+                  <div className="text-lg font-extrabold text-slate-900 group-hover:text-[#1F3A5F]">
+                    {sil.kode}
+                  </div>
+                  <div className="my-1.5 flex justify-center">
+                    <StatusBadge status={sil.status} size="xs" />
+                  </div>
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 text-[11px] text-slate-600 tabular-nums">
+                    AS <span className="font-bold text-slate-800">{formatAngkaID(sil.as, 3)}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    Urutan #{sil.urutan}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Grid Bawah: c. Panel Urutan Prioritas (EDAS) + d. Kartu AV & e. Kotak Info Status vs Skor EDAS */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* c. Panel "Urutan Prioritas (EDAS)" */}
+        <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Urutan Prioritas Inspeksi (Metode EDAS)
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Diurutkan dari nilai Appraisal Score (AS) terkecil (paling tertinggal dibanding
+                silinder lain).
+              </p>
+            </div>
+            <span className="text-xs text-slate-500">Klik baris untuk detail silinder</span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                  <th className="py-2.5 px-4 w-16 text-center">Urutan</th>
+                  <th className="py-2.5 px-3 w-20">Silinder</th>
+                  <th className="py-2.5 px-4 w-44">
+                    <div className="inline-flex items-center gap-1">
+                      <span>Skor EDAS (AS)</span>
+                      <InfoTooltip
+                        title="Skor EDAS (Appraisal Score, 0–1)"
+                        content="Mengukur posisi relatif silinder dibanding rata-rata seluruh silinder pada periode ini. Makin kecil nilai AS (mendekati 0,000), makin tertinggal performanya dan makin tinggi prioritas inspeksi."
+                      />
+                    </div>
+                  </th>
+                  <th className="py-2.5 px-3 w-28">
+                    <div className="inline-flex items-center gap-1">
+                      <span>Status</span>
+                      <InfoTooltip
+                        title="Status Ambang Absolut"
+                        content="Menunjukkan apakah salah satu kriteria sudah melewati ambang batas teknis (kondisi terburuk dari C1–C4), terlepas dari peringkat relatif EDAS."
+                      />
+                    </div>
+                  </th>
+                  <th className="py-2.5 px-4">Penyebab Utama</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {daftarPrioritas.map((sil) => {
+                  const barColor =
+                    sil.status === 'Kritis'
+                      ? '#C62828'
+                      : sil.status === 'Waspada'
+                      ? '#ED8C00'
+                      : '#2E7D32';
+                  return (
+                    <tr
+                      key={sil.kode}
+                      onClick={() => onSelectSilinder(sil.kode)}
+                      className="hover:bg-slate-50/90 cursor-pointer transition-colors group"
+                    >
+                      <td className="py-2.5 px-4 text-center">
+                        <span
+                          className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
+                            sil.urutan <= 3
+                              ? 'bg-[#1F3A5F] text-white'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {sil.urutan}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-slate-900 group-hover:text-[#1F3A5F]">
+                        {sil.kode}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-mono font-semibold text-slate-800 w-11 tabular-nums">
+                            {formatAngkaID(sil.as, 3)}
+                          </span>
+                          <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200/70">
+                            <div
+                              className="h-full rounded-full transition-all"
+                              style={{
+                                width: `${Math.max(sil.as * 100, sil.as === 0 ? 3 : 6)}%`,
+                                backgroundColor: barColor,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <StatusBadge status={sil.status} size="xs" />
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-700 flex items-center justify-between gap-2">
+                        <span>{sil.penyebab_utama}</span>
+                        <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-[#1F3A5F] shrink-0" />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Kolom Kanan: d. Solusi Rata-Rata Mesin (AV) & e. Kotak Info Status vs Skor EDAS */}
+        <div className="lg:col-span-4 space-y-5">
+          {/* d. Kartu kecil "Solusi rata-rata mesin (AV)" */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-900">
+                Solusi Rata-Rata Mesin (AV)
+              </h3>
+              <InfoTooltip
+                title="Average Solution (AV)"
+                content="Nilai acuan rata-rata mesin pada periode ini yang menjadi titik tengah perhitungan jarak positif (PDA) dan jarak negatif (NDA) dalam metode EDAS."
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80">
+                <div className="text-[11px] font-medium text-slate-500">C1 · Cpk EGT</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 tabular-nums">
+                  {formatAngkaID(dataPeriode.av.c1, 3)}
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80">
+                <div className="text-[11px] font-medium text-slate-500">C2 · Cpk Fuel Rack</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 tabular-nums">
+                  {formatAngkaID(dataPeriode.av.c2, 3)}
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80">
+                <div className="text-[11px] font-medium text-slate-500">C3 · Simpangan EGT (δT)</div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 tabular-nums">
+                  {formatAngkaID(dataPeriode.av.c3, 3)}%
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80">
+                <div className="text-[11px] font-medium text-slate-500">
+                  C4 · Simpangan FR (δFR)
+                </div>
+                <div className="text-base font-bold text-slate-900 mt-0.5 tabular-nums">
+                  {formatAngkaID(dataPeriode.av.c4, 3)}%
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* e. Kotak info "Status vs Skor EDAS" */}
+          <div className="bg-[#EEF3F8] border border-[#1F3A5F]/25 rounded-xl p-5 shadow-xs">
+            <div className="flex items-center gap-2 text-[#1F3A5F] font-bold text-sm mb-2.5">
+              <Info className="w-4 h-4 shrink-0" />
+              <h3>Cara Membaca: Status vs Skor EDAS</h3>
+            </div>
+            <ul className="space-y-2 text-xs text-slate-700 leading-relaxed">
+              <li>
+                <span className="font-bold text-slate-900">Status (Absolut):</span> Menjawab{' '}
+                <em>"apakah kriteria sudah melewati ambang?"</em> Ditentukan dari kondisi terburuk
+                keempat kriteria.
+              </li>
+              <li>
+                <span className="font-bold text-slate-900">Skor EDAS / AS (Relatif, 0–1):</span>{' '}
+                Menjawab <em>"seberapa tertinggal dibanding silinder lain pada periode ini?"</em>{' '}
+                Makin kecil nilainya, makin buruk peringkatnya.
+              </li>
+            </ul>
+            <div className="mt-3 p-3 rounded-lg bg-white/90 border border-[#1F3A5F]/15 text-xs text-slate-700 leading-relaxed">
+              <span className="font-semibold text-[#1F3A5F]">Contoh kasus: </span>
+              A4 berstatus <strong className="text-[#C62828]">Kritis</strong> karena fuel rack{' '}
+              <strong>6,62%</strong>, tetapi skornya <strong>0,742</strong> karena kriteria lain
+              baik.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 7.1 UNGGAH DATA (KF-01, KF-02)
+ */
+function UnggahDataPage({
+  onProsesPenilaian,
+}: {
+  onProsesPenilaian: () => void;
+}) {
+  const [periodeUnggah, setPeriodeUnggah] = useState('Agustus 2025');
+  const [hasilUnggah, setHasilUnggah] = useState<HasilUnggahResponse | null>(MOCK_HASIL_UNGGAH);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
+
+  const jalankanSimulasiUnggah = async (namaFile?: string) => {
+    setIsSimulating(true);
+    const res = await mockApi.postUnggah(namaFile);
+    setTimeout(() => {
+      setHasilUnggah({ ...res, periode: periodeUnggah });
+      setIsSimulating(false);
+    }, 250);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      jalankanSimulasiUnggah(file.name);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    jalankanSimulasiUnggah(file?.name || 'Data_Patroli_Operasi_Agustus_2025.xlsx');
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Baris Atas: Area Unggah + Kotak Aturan Validasi */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Area Drag & Drop */}
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">
+                Unggah Log Patroli Operasi Per Jam
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Unggah berkas spreadsheet (.xls / .xlsx) untuk pemeriksaan kualitas data sebelum
+                penilaian SPK.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="periode-unggah" className="text-xs font-medium text-slate-600">
+                Periode:
+              </label>
+              <select
+                id="periode-unggah"
+                value={periodeUnggah}
+                onChange={(e) => setPeriodeUnggah(e.target.value)}
+                className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+              >
+                <option value="Agustus 2025">Agustus 2025</option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={handleDrop}
+            className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
+              isDragging
+                ? 'border-[#1F3A5F] bg-[#EEF3F8]'
+                : 'border-slate-300 bg-slate-50/70 hover:border-[#1F3A5F]/60'
+            }`}
+          >
+            <div className="w-11 h-11 rounded-full bg-[#1F3A5F]/10 text-[#1F3A5F] flex items-center justify-center mx-auto mb-3">
+              <UploadCloud className="w-6 h-6" />
+            </div>
+            <p className="text-sm font-semibold text-slate-800">
+              Seret & lepas berkas log patroli (.xls / .xlsx) ke area ini
+            </p>
+            <p className="text-xs text-slate-500 mt-1 mb-4">
+              Atau pilih berkas dari komputer Anda untuk menjalankan simulasi validasi data
+            </p>
+
+            <div className="flex flex-wrap items-center justify-center gap-2.5">
+              <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-[#1F3A5F] text-white hover:bg-[#162B47] transition-colors">
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Pilih Berkas Excel</span>
+                <input
+                  type="file"
+                  accept=".xls,.xlsx"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() => jalankanSimulasiUnggah('Data_Patroli_Operasi_Agustus_2025.xlsx')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Simulasikan Unggah Ulang</span>
+              </button>
+            </div>
+
+            {hasilUnggah && (
+              <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#2E7D32]" />
+                <span>Berkas aktif: {hasilUnggah.nama_berkas}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Kotak "Aturan validasi" */}
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-slate-900 font-bold text-sm mb-3">
+              <ShieldAlert className="w-4 h-4 text-[#1F3A5F]" />
+              <h3>Aturan Validasi Data Operasi</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+              Setiap baris pencatatan per jam disaring menggunakan kriteria kondisi operasi tunak
+              (steady-state) berikut sebelum perhitungan kriteria:
+            </p>
+            <ul className="space-y-2 text-xs text-slate-700">
+              {MOCK_HASIL_UNGGAH.aturan_validasi.map((aturan, idx) => (
+                <li
+                  key={idx}
+                  className="flex items-start gap-2.5 p-2 rounded-lg bg-slate-50 border border-slate-200/70"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-[#2E7D32] shrink-0 mt-0.5" />
+                  <span className="font-medium">{aturan}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-500">
+            Batas referensi sensor: EGT <strong>350–530 °C</strong> · Fuel rack{' '}
+            <strong>14–47 mm</strong>.
+          </div>
+        </div>
+      </div>
+
+      {/* Ringkasan & Tabel Rincian Validasi */}
+      {isSimulating ? (
+        <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-sm text-slate-600">
+          Memeriksa kelengkapan dan aturan validasi berkas...
+        </div>
+      ) : (
+        hasilUnggah && (
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Ringkasan Validasi — Periode {hasilUnggah.periode}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Hasil penyaringan otomatis log operasi sebelum masuk ke tahap evaluasi SPK.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onProsesPenilaian}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#1F3A5F] text-white hover:bg-[#162B47] shadow-sm transition-colors"
+              >
+                <span>Proses Penilaian</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* 4 Kartu Ringkasan Validasi */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="text-xs font-medium text-slate-500">Jam berisi data</div>
+                <div className="text-2xl font-extrabold text-slate-900 mt-1 tabular-nums">
+                  {formatBulatID(hasilUnggah.terbaca)}{' '}
+                  <span className="text-xs font-normal text-slate-500">jam</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#2E7D32]/[0.05] border border-[#2E7D32]/30">
+                <div className="text-xs font-semibold text-[#2E7D32]">Data valid</div>
+                <div className="text-2xl font-extrabold text-[#2E7D32] mt-1 tabular-nums">
+                  {formatBulatID(hasilUnggah.valid)}{' '}
+                  <span className="text-xs font-normal text-[#2E7D32]/80">jam</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#C62828]/[0.05] border border-[#C62828]/30">
+                <div className="text-xs font-semibold text-[#C62828]">Ditolak</div>
+                <div className="text-2xl font-extrabold text-[#C62828] mt-1 tabular-nums">
+                  {formatBulatID(hasilUnggah.ditolak)}{' '}
+                  <span className="text-xs font-normal text-[#C62828]/80">jam</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#EEF3F8] border border-[#1F3A5F]/25">
+                <div className="text-xs font-semibold text-[#1F3A5F]">Hari operasi</div>
+                <div className="text-2xl font-extrabold text-[#1F3A5F] mt-1 tabular-nums">
+                  {formatBulatID(hasilUnggah.hari_operasi)}{' '}
+                  <span className="text-xs font-normal text-[#1F3A5F]/80">hari</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Tabel Rincian Validasi */}
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                    <th className="py-2.5 px-4">Tahap Validasi</th>
+                    <th className="py-2.5 px-4 w-32 text-right">Jumlah Jam</th>
+                    <th className="py-2.5 px-4">Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {hasilUnggah.rincian.map((row, index) => (
+                    <tr key={index} className="hover:bg-slate-50/70">
+                      <td className="py-2.5 px-4 font-semibold text-slate-800">{row.tahap}</td>
+                      <td className="py-2.5 px-4 text-right font-mono font-bold tabular-nums">
+                        <span
+                          className={
+                            row.tipe === 'ditolak'
+                              ? 'text-[#C62828]'
+                              : row.tipe === 'dikoreksi'
+                              ? 'text-[#B86800]'
+                              : 'text-slate-700'
+                          }
+                        >
+                          {formatBulatID(row.jumlah_jam)}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-600">{row.keterangan}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+/**
+ * 7.3 DETAIL SILINDER (KF-04)
+ */
+function DetailSilinderPage({
+  silinder,
+  semuaSilinder,
+  onSelectSilinder,
+  onBackToDasbor,
+  onOpenTren,
+  onOpenTindakan,
+}: {
+  silinder: DataSilinderPeriode;
+  semuaSilinder: DataSilinderPeriode[];
+  onSelectSilinder: (kode: KodeSilinder) => void;
+  onBackToDasbor: () => void;
+  onOpenTren: (kode: KodeSilinder) => void;
+  onOpenTindakan: (kode: KodeSilinder) => void;
+}) {
+  // Hitung persentase posisi mini-bar terhadap skala acuan ambang
+  const getCpkBarPercent = (val: number) => Math.min(100, Math.max(8, (val / 4.5) * 100));
+  const getDevBarPercent = (val: number) => Math.min(100, Math.max(6, (val / 15) * 100));
+
+  const kriteriaCards = [
+    {
+      kode: 'C1',
+      nama: 'Kapabilitas EGT',
+      simbol: 'Cpk',
+      tipe: 'Benefit',
+      nilaiStr: formatAngkaID(silinder.nilai.c1, 2),
+      satuan: '(indeks Cpk)',
+      ambang: 'Normal ≥ 1,33 · Waspada 1,00–1,33 · Kritis < 1,00',
+      status: silinder.status_kriteria.c1,
+      barPct: getCpkBarPercent(silinder.nilai.c1),
+      thresholdMarks: [
+        { pct: (1.0 / 4.5) * 100, color: '#C62828', label: '1,00' },
+        { pct: (1.33 / 4.5) * 100, color: '#2E7D32', label: '1,33' },
+      ],
+    },
+    {
+      kode: 'C2',
+      nama: 'Kapabilitas Fuel Rack',
+      simbol: 'Cpk',
+      tipe: 'Benefit',
+      nilaiStr: formatAngkaID(silinder.nilai.c2, 2),
+      satuan: '(indeks Cpk)',
+      ambang: 'Normal ≥ 1,33 · Waspada 1,00–1,33 · Kritis < 1,00',
+      status: silinder.status_kriteria.c2,
+      barPct: getCpkBarPercent(silinder.nilai.c2),
+      thresholdMarks: [
+        { pct: (1.0 / 4.5) * 100, color: '#C62828', label: '1,00' },
+        { pct: (1.33 / 4.5) * 100, color: '#2E7D32', label: '1,33' },
+      ],
+    },
+    {
+      kode: 'C3',
+      nama: 'Simpangan EGT (δT)',
+      simbol: 'δT',
+      tipe: 'Cost',
+      nilaiStr: `${formatAngkaID(silinder.nilai.c3, 2)}%`,
+      satuan: 'persen (%)',
+      ambang: 'Normal < 5% · Waspada 5–10% · Kritis ≥ 10%',
+      status: silinder.status_kriteria.c3,
+      barPct: getDevBarPercent(silinder.nilai.c3),
+      thresholdMarks: [
+        { pct: (5 / 15) * 100, color: '#ED8C00', label: '5%' },
+        { pct: (10 / 15) * 100, color: '#C62828', label: '10%' },
+      ],
+    },
+    {
+      kode: 'C4',
+      nama: 'Simpangan Fuel Rack (δFR)',
+      simbol: 'δFR',
+      tipe: 'Cost',
+      nilaiStr: `${formatAngkaID(silinder.nilai.c4, 2)}%`,
+      satuan: 'persen (%)',
+      ambang: 'Normal < 5% · Kritis ≥ 5%',
+      status: silinder.status_kriteria.c4,
+      barPct: getDevBarPercent(silinder.nilai.c4),
+      thresholdMarks: [{ pct: (5 / 15) * 100, color: '#C62828', label: '5%' }],
+    },
+  ];
+
+  const kontribusiList = [
+    { kode: 'C1', label: 'C1 · Kapabilitas EGT (Cpk)', pct: silinder.kontribusi.c1 },
+    { kode: 'C2', label: 'C2 · Kapabilitas Fuel Rack (Cpk)', pct: silinder.kontribusi.c2 },
+    { kode: 'C3', label: 'C3 · Simpangan EGT (δT)', pct: silinder.kontribusi.c3 },
+    { kode: 'C4', label: 'C4 · Simpangan Fuel Rack (δFR)', pct: silinder.kontribusi.c4 },
+  ];
+
+  const totalKontribusi =
+    silinder.kontribusi.c1 +
+    silinder.kontribusi.c2 +
+    silinder.kontribusi.c3 +
+    silinder.kontribusi.c4;
+
+  return (
+    <div className="space-y-5">
+      {/* Bar Navigasi Cepat Silinder A1–A9 */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={onBackToDasbor}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#1F3A5F] transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Kembali ke Dasbor Periode</span>
+        </button>
+
+        <div className="flex items-center gap-1 bg-white border border-slate-200 p-1 rounded-xl">
+          {semuaSilinder.map((item) => {
+            const active = item.kode === silinder.kode;
+            const dot = STATUS_STYLES[item.status].dotColor;
+            return (
+              <button
+                key={item.kode}
+                type="button"
+                onClick={() => onSelectSilinder(item.kode)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+                  active
+                    ? 'bg-[#1F3A5F] text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-white' : dot}`} />
+                <span>{item.kode}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Header Detail Silinder */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="w-14 h-14 rounded-xl bg-[#1F3A5F] text-white flex flex-col items-center justify-center shrink-0">
+            <span className="text-[10px] uppercase tracking-wider text-blue-200">Silinder</span>
+            <span className="text-xl font-extrabold leading-none mt-0.5">{silinder.kode}</span>
+          </div>
+
+          <div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="text-xl font-extrabold text-slate-900">
+                Detail Evaluasi Silinder {silinder.kode}
+              </h2>
+              <StatusBadge status={silinder.status} size="md" />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-slate-600">
+              <span className="inline-flex items-center gap-1">
+                Skor EDAS (AS):{' '}
+                <strong className="text-slate-900 font-mono">
+                  {formatAngkaID(silinder.as, 3)}
+                </strong>
+                <InfoTooltip
+                  title="Skor EDAS (AS)"
+                  content="Skor relatif antar-silinder (0–1). Makin kecil nilainya, makin tertinggal performa silinder ini dibanding rata-rata mesin."
+                />
+              </span>
+              <span className="text-slate-300">|</span>
+              <span>
+                Peringkat Prioritas:{' '}
+                <strong className="text-[#1F3A5F]">Urutan {silinder.urutan} dari 9</strong>
+              </span>
+              <span className="text-slate-300">|</span>
+              <span>
+                Rata-rata EGT silinder:{' '}
+                <strong className="text-slate-900 tabular-nums">
+                  {formatAngkaID(silinder.rerata_egt, 1)} °C
+                </strong>{' '}
+                <span className="text-slate-400">(batas 350–530 °C)</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Tombol Aksi: Lihat Tren & Tulis Catatan Tindakan */}
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => onOpenTren(silinder.kode)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-[#1F3A5F] text-white hover:bg-[#162B47] transition-colors"
+          >
+            <TrendingUp className="w-4 h-4" />
+            <span>Lihat Tren</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenTindakan(silinder.kode)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-white text-slate-800 border border-slate-300 hover:bg-slate-50 transition-colors"
+          >
+            <ClipboardList className="w-4 h-4 text-[#1F3A5F]" />
+            <span>Tulis Catatan Tindakan</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 4 Kartu Kriteria */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {kriteriaCards.map((k) => {
+          const st = STATUS_STYLES[k.status];
+          return (
+            <div
+              key={k.kode}
+              className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="inline-block text-[11px] font-bold text-[#1F3A5F] bg-[#EEF3F8] px-2 py-0.5 rounded">
+                      {k.kode} · {k.tipe}
+                    </span>
+                    <h3 className="text-xs font-bold text-slate-800 mt-1.5">{k.nama}</h3>
+                  </div>
+                  <StatusBadge status={k.status} size="xs" />
+                </div>
+
+                <div className="mt-3 flex items-baseline gap-1.5">
+                  <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
+                    {k.nilaiStr}
+                  </span>
+                  <span className="text-[11px] text-slate-500">{k.satuan}</span>
+                </div>
+              </div>
+
+              {/* Mini-bar posisi nilai terhadap ambang */}
+              <div className="mt-4">
+                <div className="relative h-2.5 w-full bg-slate-100 rounded-full overflow-visible border border-slate-200/80">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${k.barPct}%`, backgroundColor: st.hex }}
+                  />
+                  {k.thresholdMarks.map((tm, i) => (
+                    <div
+                      key={i}
+                      title={`Ambang ${tm.label}`}
+                      style={{ left: `${tm.pct}%` }}
+                      className="absolute -top-1 -bottom-1 w-0.5 bg-slate-800"
+                    />
+                  ))}
+                </div>
+                <div className="mt-2 text-[11px] text-slate-500 leading-snug">
+                  Ambang: {k.ambang}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Bagian Tengah: Kontribusi Penyebab + Besaran (NDA/PDA) + Arah Pemeriksaan */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Grafik Batang Horizontal "Kontribusi penyebab" */}
+        <div className="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-bold text-slate-900">
+              Kontribusi Penyebab Ketertinggalan (w × NDA)
+            </h3>
+            <span className="text-[11px] text-slate-500 font-medium">Persen (%)</span>
+          </div>
+          <p className="text-xs text-slate-500 mb-4">
+            Proporsi masing-masing kriteria terhadap total jarak negatif (NDA terbobot) silinder{' '}
+            {silinder.kode}.
+          </p>
+
+          {totalKontribusi === 0 ? (
+            <div className="p-4 rounded-xl bg-[#2E7D32]/[0.05] border border-[#2E7D32]/25 text-xs text-[#2E7D32] leading-relaxed">
+              <strong>Tidak ada kontribusi negatif (0% pada seluruh kriteria):</strong> Silinder{' '}
+              {silinder.kode} memiliki nilai NDA = 0,000 di seluruh kriteria karena performanya
+              lebih baik daripada solusi rata-rata mesin (AV).
+            </div>
+          ) : (
+            <div className="space-y-3.5">
+              {kontribusiList.map((item) => (
+                <div key={item.kode}>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="font-medium text-slate-700">{item.label}</span>
+                    <span className="font-bold text-slate-900 tabular-nums">
+                      {formatBulatID(item.pct)}%
+                    </span>
+                  </div>
+                  <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden border border-slate-200/70">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{
+                        width: `${item.pct}%`,
+                        backgroundColor: item.pct >= 50 ? '#C62828' : '#1F3A5F',
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Kolom Kanan: Kartu Besaran & Kartu Arah Pemeriksaan */}
+        <div className="lg:col-span-6 space-y-5">
+          {/* Kartu "Besaran" */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+            <h3 className="text-sm font-bold text-slate-900 mb-2">
+              Besaran Penyimpangan Relatif (NDA & PDA)
+            </h3>
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-800 mb-3">
+              {silinder.ringkasan_besaran}
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              {(['c1', 'c2', 'c3', 'c4'] as const).map((k) => (
+                <div key={k} className="p-2 rounded-lg border border-slate-200/80 bg-white">
+                  <div className="text-[11px] font-bold text-[#1F3A5F] uppercase">{k}</div>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    NDA:{' '}
+                    <span className="font-mono font-bold text-slate-900">
+                      {formatAngkaID(silinder.nda[k], 3)}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    PDA:{' '}
+                    <span className="font-mono font-medium text-slate-700">
+                      {formatAngkaID(silinder.pda[k], 3)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Kartu "Arah pemeriksaan (indikasi, bukan diagnosis)" */}
+          <div className="bg-[#EEF3F8] border border-[#1F3A5F]/30 rounded-xl p-5 shadow-xs">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2 text-[#1F3A5F] font-bold text-sm">
+                <Wrench className="w-4 h-4" />
+                <h3>Arah Pemeriksaan</h3>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-white text-[#1F3A5F] border border-[#1F3A5F]/20">
+                Indikasi, bukan diagnosis
+              </span>
+            </div>
+
+            <div className="text-base font-extrabold text-slate-900 mb-1.5">
+              {silinder.arah_pemeriksaan}
+            </div>
+            <p className="text-xs text-slate-700 leading-relaxed">{silinder.detail_pemeriksaan}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 7.4 TREN SILINDER (KF-05)
+ */
+function TrenSilinderPage({
+  selectedSilinder,
+  onSelectSilinder,
+  onOpenDetail,
+}: {
+  selectedSilinder: KodeSilinder;
+  onSelectSilinder: (kode: KodeSilinder) => void;
+  onOpenDetail: (kode: KodeSilinder) => void;
+}) {
+  const [kriteria, setKriteria] = useState<'dT' | 'dFR'>('dT');
+  const [trenData, setTrenData] = useState<TrenSilinderResponse | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    mockApi.getTrenSilinder(selectedSilinder, kriteria).then((res) => {
+      if (mounted) setTrenData(res);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [selectedSilinder, kriteria]);
+
+  const allCylinders: KodeSilinder[] = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9'];
+
+  if (!trenData) return null;
+
+  return (
+    <div className="space-y-5">
+      {/* Bar Kontrol: Pemilih Silinder & Pemilih Kriteria */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <label htmlFor="pilih-silinder-tren" className="text-xs font-semibold text-slate-700">
+              Silinder:
+            </label>
+            <select
+              id="pilih-silinder-tren"
+              value={selectedSilinder}
+              onChange={(e) => onSelectSilinder(e.target.value as KodeSilinder)}
+              className="text-xs font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+            >
+              {allCylinders.map((k) => (
+                <option key={k} value={k}>
+                  Silinder {k}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Toggle Kriteria δT / δFR */}
+          <div className="inline-flex rounded-lg bg-slate-100 p-1 border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setKriteria('dT')}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                kriteria === 'dT'
+                  ? 'bg-[#1F3A5F] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Simpangan EGT (δT)
+            </button>
+            <button
+              type="button"
+              onClick={() => setKriteria('dFR')}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                kriteria === 'dFR'
+                  ? 'bg-[#1F3A5F] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Simpangan Fuel Rack (δFR)
+            </button>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onOpenDetail(selectedSilinder)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#1F3A5F] bg-[#EEF3F8] hover:bg-[#1F3A5F]/15 transition-colors"
+        >
+          <span>Buka Detail Silinder {selectedSilinder}</span>
+          <ChevronRight className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Grafik Garis Simpangan Harian (%) */}
+      <TrendLineChart
+        data={trenData}
+        selectedCylinder={selectedSilinder}
+        kriteria={kriteria}
+        onSelectCylinder={onSelectSilinder}
+      />
+
+      {/* 4 Kartu Indikator Tren */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* 1. Frekuensi jam di atas ambang pada periode ini */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+          <div className="text-xs font-semibold text-slate-500">
+            Frekuensi Jam di Atas Ambang
+          </div>
+          {kriteria === 'dT' ? (
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs text-slate-600">δT ≥ 5% (Waspada):</span>
+                <span className="text-base font-extrabold text-[#B86800] tabular-nums">
+                  {formatAngkaID(trenData.frekuensi.dT_ge_5, 1)}%
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs text-slate-600">δT ≥ 10% (Kritis):</span>
+                <span className="text-base font-extrabold text-[#C62828] tabular-nums">
+                  {formatAngkaID(trenData.frekuensi.dT_ge_10, 1)}%
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2">
+              <div className="text-2xl font-extrabold text-slate-900 tabular-nums">
+                {formatAngkaID(trenData.frekuensi.dFR_ge_5, 1)}%
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Proporsi jam operasi dengan δFR ≥ 5% (ambang Kritis)
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 2. Frekuensi mingguan */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+          <div className="text-xs font-semibold text-slate-500">
+            Frekuensi Mingguan ({kriteria === 'dT' ? 'δT ≥ 10%' : 'δFR ≥ 5%'})
+          </div>
+          <div className="grid grid-cols-4 gap-1.5 mt-2.5 text-center">
+            {trenData.frekuensi.mingguan.map((m, idx) => (
+              <div
+                key={idx}
+                className="p-1.5 rounded-lg bg-slate-50 border border-slate-200/80"
+              >
+                <div className="text-[10px] text-slate-500">M{idx + 1}</div>
+                <div className="text-xs font-bold text-slate-900 mt-0.5 tabular-nums">
+                  {formatAngkaID(m.nilai, 1)}%
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-2 leading-snug">
+            {trenData.frekuensi.keterangan_mingguan}
+          </div>
+        </div>
+
+        {/* 3. Nilai terakhir */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+          <div className="text-xs font-semibold text-slate-500">Nilai Terakhir</div>
+          <div className="text-2xl font-extrabold text-slate-900 mt-2 tabular-nums">
+            {formatAngkaID(trenData.nilai_terakhir, 1)}%
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            Tercatat pada {trenData.tanggal_terakhir}
+          </div>
+        </div>
+
+        {/* 4. Arah tren */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+          <div className="text-xs font-semibold text-slate-500">Arah Tren Periode</div>
+          <div className="mt-2 flex items-center gap-2">
+            {trenData.arah_tren === 'Naik' && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#C62828]/10 text-[#C62828] font-bold text-sm">
+                <ArrowUpRight className="w-4 h-4" />
+                <span>Naik</span>
+              </span>
+            )}
+            {trenData.arah_tren === 'Turun' && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#2E7D32]/10 text-[#2E7D32] font-bold text-sm">
+                <ArrowDownRight className="w-4 h-4" />
+                <span>Turun</span>
+              </span>
+            )}
+            {trenData.arah_tren === 'Stabil' && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold text-sm">
+                <Minus className="w-4 h-4" />
+                <span>Stabil</span>
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-2 tabular-nums">
+            Perubahan awal–akhir periode:{' '}
+            <strong>
+              {trenData.selisih_awal_akhir >= 0 ? '+' : ''}
+              {formatAngkaID(trenData.selisih_awal_akhir, 1)}%
+            </strong>
+          </div>
+        </div>
+      </div>
+
+      {/* Catatan tetap wajib sesuai Bagian 7.4 PRD */}
+      <div className="rounded-xl bg-[#EEF3F8] border border-[#1F3A5F]/25 px-4 py-3 flex items-center gap-2.5 text-xs text-slate-800">
+        <Info className="w-4 h-4 text-[#1F3A5F] shrink-0" />
+        <span>
+          <strong>Catatan metodologi:</strong> Tren memakai nilai simpangan (δ), bukan skor EDAS,
+          karena skor EDAS dihitung relatif per periode.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 7.5 CATATAN TINDAKAN (KF-06)
+ */
+function CatatanTindakanPage({
+  defaultSilinder,
+  catatanList,
+  onTambahCatatan,
+  onToggleStatus,
+}: {
+  defaultSilinder: KodeSilinder;
+  catatanList: CatatanTindakanItem[];
+  onTambahCatatan: (item: Omit<CatatanTindakanItem, 'id'>) => void;
+  onToggleStatus: (id: string) => void;
+}) {
+  const [silinder, setSilinder] = useState<KodeSilinder>(defaultSilinder);
+  const [periode, setPeriode] = useState('Agustus 2025');
+  const [temuan, setTemuan] = useState('');
+  const [tindakan, setTindakan] = useState('');
+  const [tanggal, setTanggal] = useState('2025-08-29');
+  const [namaEngineer, setNamaEngineer] = useState('R. Pratama');
+  const [status, setStatus] = useState<'Direncanakan' | 'Selesai'>('Direncanakan');
+  const [filterSilinder, setFilterSilinder] = useState<'SEMUA' | KodeSilinder>('SEMUA');
+  const [pesanSukses, setPesanSukses] = useState(false);
+
+  useEffect(() => {
+    setSilinder(defaultSilinder);
+  }, [defaultSilinder]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!temuan.trim() || !tindakan.trim() || !namaEngineer.trim()) return;
+
+    onTambahCatatan({
+      silinder,
+      periode,
+      temuan: temuan.trim(),
+      tindakan: tindakan.trim(),
+      tanggal,
+      nama_engineer: namaEngineer.trim(),
+      status,
+    });
+
+    setTemuan('');
+    setTindakan('');
+    setPesanSukses(true);
+    setTimeout(() => setPesanSukses(false), 3000);
+  };
+
+  const filteredList = useMemo(() => {
+    if (filterSilinder === 'SEMUA') return catatanList;
+    return catatanList.filter((item) => item.silinder === filterSilinder);
+  }, [catatanList, filterSilinder]);
+
+  const allCylinders: KodeSilinder[] = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9'];
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      {/* Formulir Catatan Tindakan */}
+      <form
+        onSubmit={handleSubmit}
+        className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4"
+      >
+        <div>
+          <h2 className="text-base font-bold text-slate-900">Catat Tindakan Inspeksi</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Dokumentasikan temuan lapangan dan rencana/realisasi pemeliharaan per silinder.
+          </p>
+        </div>
+
+        {pesanSukses && (
+          <div className="p-3 rounded-lg bg-[#2E7D32]/10 border border-[#2E7D32]/30 text-[#2E7D32] text-xs font-semibold flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Catatan tindakan berhasil disimpan ke riwayat periode.</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Silinder</label>
+            <select
+              value={silinder}
+              onChange={(e) => setSilinder(e.target.value as KodeSilinder)}
+              className="w-full text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+            >
+              {allCylinders.map((k) => (
+                <option key={k} value={k}>
+                  Silinder {k}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Periode</label>
+            <input
+              type="text"
+              value={periode}
+              onChange={(e) => setPeriode(e.target.value)}
+              className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+              required
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Temuan</label>
+          <textarea
+            rows={3}
+            value={temuan}
+            onChange={(e) => setTemuan(e.target.value)}
+            placeholder="Contoh: Simpangan δT silinder A1 mencapai 11,39% (Kritis)..."
+            className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">
+            Tindakan Inspeksi / Korektif
+          </label>
+          <textarea
+            rows={3}
+            value={tindakan}
+            onChange={(e) => setTindakan(e.target.value)}
+            placeholder="Contoh: Pemeriksaan tekanan pembukaan nosel injektor..."
+            className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+            required
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Tanggal</label>
+            <input
+              type="date"
+              value={tanggal}
+              onChange={(e) => setTanggal(e.target.value)}
+              className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Nama Engineer
+            </label>
+            <input
+              type="text"
+              value={namaEngineer}
+              onChange={(e) => setNamaEngineer(e.target.value)}
+              placeholder="Nama engineer"
+              className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+              required
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">
+            Status Tindak Lanjut
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {(['Direncanakan', 'Selesai'] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatus(st)}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-colors ${
+                  status === st
+                    ? 'bg-[#1F3A5F] text-white border-[#1F3A5F]'
+                    : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-[#1F3A5F] text-white hover:bg-[#162B47] transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          <span>Simpan Catatan Tindakan</span>
+        </button>
+      </form>
+
+      {/* Tabel Riwayat Catatan Tindakan */}
+      <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">
+              Riwayat Catatan Tindakan ({filteredList.length})
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Klik status tindak lanjut untuk memperbarui progres pelaksanaan.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <select
+              value={filterSilinder}
+              onChange={(e) => setFilterSilinder(e.target.value as 'SEMUA' | KodeSilinder)}
+              aria-label="Filter per silinder"
+              className="text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+            >
+              <option value="SEMUA">Semua Silinder</option>
+              {allCylinders.map((k) => (
+                <option key={k} value={k}>
+                  Silinder {k}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                <th className="py-2.5 px-4 w-20">Silinder</th>
+                <th className="py-2.5 px-4">Temuan & Tindakan</th>
+                <th className="py-2.5 px-3 w-28">Engineer</th>
+                <th className="py-2.5 px-4 w-32">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-xs">
+              {filteredList.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-8 text-center text-slate-500">
+                    Belum ada catatan tindakan untuk filter silinder ini.
+                  </td>
+                </tr>
+              ) : (
+                filteredList.map((item) => (
+                  <tr key={item.id} className="hover:bg-slate-50/70 align-top">
+                    <td className="py-3 px-4">
+                      <span className="inline-block px-2 py-0.5 rounded bg-[#1F3A5F] text-white font-bold">
+                        {item.silinder}
+                      </span>
+                      <div className="text-[10px] text-slate-400 mt-1">{item.tanggal}</div>
+                    </td>
+                    <td className="py-3 px-4 space-y-1">
+                      <div className="font-semibold text-slate-900">{item.temuan}</div>
+                      <div className="text-slate-600">Tindakan: {item.tindakan}</div>
+                      <div className="text-[10px] text-slate-400">Periode: {item.periode}</div>
+                    </td>
+                    <td className="py-3 px-3 font-medium text-slate-700">{item.nama_engineer}</td>
+                    <td className="py-3 px-4">
+                      <button
+                        type="button"
+                        onClick={() => onToggleStatus(item.id)}
+                        title="Klik untuk mengubah status"
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                          item.status === 'Selesai'
+                            ? 'bg-[#2E7D32]/10 text-[#2E7D32] border-[#2E7D32]/30'
+                            : 'bg-[#ED8C00]/15 text-[#B86800] border-[#ED8C00]/40'
+                        }`}
+                      >
+                        {item.status === 'Selesai' ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Activity className="w-3 h-3" />
+                        )}
+                        <span>{item.status}</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 7.6 PENGATURAN (Khusus Team Leader)
+ */
+function PengaturanPage({
+  pengaturan,
+  onSimpanPengaturan,
+}: {
+  pengaturan: PengaturanResponse;
+  onSimpanPengaturan: (updated: PengaturanResponse, ringkasanPerubahan: string) => void;
+}) {
+  const [ambangEdit, setAmbangEdit] = useState<AmbangKriteriaConfig[]>(pengaturan.ambang);
+  const [bobotEdit, setBobotEdit] = useState<KriteriaNilai>(pengaturan.bobot);
+  const [tersimpanMsg, setTersimpanMsg] = useState(false);
+
+  const totalBobot = Number(
+    (bobotEdit.c1 + bobotEdit.c2 + bobotEdit.c3 + bobotEdit.c4).toFixed(2)
+  );
+  const isBobotValid = Math.abs(totalBobot - 1.0) < 0.001;
+
+  const handleAmbangChange = (
+    idx: number,
+    field: 'normal' | 'waspada' | 'kritis',
+    val: string
+  ) => {
+    setAmbangEdit((prev) =>
+      prev.map((row, i) => (i === idx ? { ...row, [field]: val } : row))
+    );
+  };
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isBobotValid) return;
+
+    const ringkasan = `Pembaruan bobot C1=${formatAngkaID(bobotEdit.c1, 2)}, C2=${formatAngkaID(
+      bobotEdit.c2,
+      2
+    )}, C3=${formatAngkaID(bobotEdit.c3, 2)}, C4=${formatAngkaID(
+      bobotEdit.c4,
+      2
+    )} dan tabel ambang kriteria.`;
+
+    onSimpanPengaturan(
+      {
+        ...pengaturan,
+        ambang: ambangEdit,
+        bobot: bobotEdit,
+      },
+      ringkasan
+    );
+
+    setTersimpanMsg(true);
+    setTimeout(() => setTersimpanMsg(false), 3500);
+  };
+
+  return (
+    <form onSubmit={handleSave} className="space-y-5">
+      {/* Banner wajib sesuai Bagian 7.6 PRD */}
+      <div className="rounded-xl bg-[#EEF3F8] border border-[#1F3A5F]/30 px-5 py-3.5 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 text-xs font-semibold text-[#1F3A5F]">
+          <Info className="w-4 h-4 shrink-0" />
+          <span>Perubahan berlaku pada perhitungan periode berikutnya.</span>
+        </div>
+        {tersimpanMsg && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#2E7D32] bg-white px-3 py-1 rounded-full border border-[#2E7D32]/30">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Pengaturan tersimpan</span>
+          </span>
+        )}
+      </div>
+
+      {/* Grid Atas: Tabel Ambang & Bobot Kriteria */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Tabel Ambang per Kriteria */}
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                Ambang Penilaian Status per Kriteria
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Menentukan klasifikasi status absolut Normal, Waspada, dan Kritis.
+              </p>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              Operasi: EGT {pengaturan.batas_operasi.egt} · FR {pengaturan.batas_operasi.fuel_rack}
+            </span>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                  <th className="py-2.5 px-3">Kriteria</th>
+                  <th className="py-2.5 px-3 text-[#2E7D32]">Normal</th>
+                  <th className="py-2.5 px-3 text-[#B86800]">Waspada</th>
+                  <th className="py-2.5 px-3 text-[#C62828]">Kritis</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {ambangEdit.map((row, idx) => (
+                  <tr key={row.kriteria}>
+                    <td className="py-2.5 px-3 font-semibold text-slate-800">
+                      {row.kriteria} · {row.nama}
+                    </td>
+                    <td className="py-2 px-2">
+                      <input
+                        type="text"
+                        value={row.normal}
+                        onChange={(e) => handleAmbangChange(idx, 'normal', e.target.value)}
+                        className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#1F3A5F]"
+                      />
+                    </td>
+                    <td className="py-2 px-2">
+                      <input
+                        type="text"
+                        value={row.waspada}
+                        onChange={(e) => handleAmbangChange(idx, 'waspada', e.target.value)}
+                        className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#1F3A5F]"
+                      />
+                    </td>
+                    <td className="py-2 px-2">
+                      <input
+                        type="text"
+                        value={row.kritis}
+                        onChange={(e) => handleAmbangChange(idx, 'kritis', e.target.value)}
+                        className="w-full px-2 py-1 rounded border border-slate-300 text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#1F3A5F]"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Bobot per Kriteria + Penjelasan Penurunan Bobot */}
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Bobot Kriteria EDAS</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Total keempat bobot harus tepat 1,00.</p>
+            </div>
+            <div
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold tabular-nums border ${
+                isBobotValid
+                  ? 'bg-[#2E7D32]/10 text-[#2E7D32] border-[#2E7D32]/30'
+                  : 'bg-[#C62828]/10 text-[#C62828] border-[#C62828]/30'
+              }`}
+            >
+              Total: {formatAngkaID(totalBobot, 2)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {(
+              [
+                { key: 'c1', label: 'C1 · Kapabilitas EGT' },
+                { key: 'c2', label: 'C2 · Kapabilitas FR' },
+                { key: 'c3', label: 'C3 · Simpangan EGT (δT)' },
+                { key: 'c4', label: 'C4 · Simpangan FR (δFR)' },
+              ] as const
+            ).map((item) => (
+              <div key={item.key} className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  {item.label}
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  value={bobotEdit[item.key]}
+                  onChange={(e) =>
+                    setBobotEdit((prev) => ({
+                      ...prev,
+                      [item.key]: parseFloat(e.target.value) || 0,
+                    }))
+                  }
+                  className="w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs font-bold text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-[#1F3A5F]"
+                />
+              </div>
+            ))}
+          </div>
+
+          {!isBobotValid && (
+            <div className="p-2.5 rounded-lg bg-[#C62828]/10 border border-[#C62828]/30 text-xs text-[#C62828] font-medium">
+              Jumlah bobot saat ini <strong>{formatAngkaID(totalBobot, 2)}</strong>. Sesuaikan nilai
+              hingga total menjadi <strong>1,00</strong> sebelum menyimpan.
+            </div>
+          )}
+
+          {/* Penjelasan Penurunan Bobot sesuai Bagian 7.6 PRD */}
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 text-xs text-slate-700 leading-relaxed space-y-1.5">
+            <div className="font-bold text-slate-900">Dasar Penurunan Bobot Kriteria:</div>
+            <p>
+              • Subsistem <strong>EGT = 0,519</strong> (diturunkan dari porsi kerusakan injektor{' '}
+              <strong>41%</strong> terhadap total gangguan utama).
+            </p>
+            <p>
+              • Subsistem <strong>Fuel Rack = 0,481</strong> (diturunkan dari porsi kerusakan pompa
+              injeksi <strong>38%</strong>).
+            </p>
+            <p>
+              • Pembagian per jenis indikator: simpangan relatif mendapat porsi{' '}
+              <strong>2/3</strong> (C3 = 0,35; C4 = 0,32) dan kapabilitas Cpk mendapat porsi{' '}
+              <strong>1/3</strong> (C1 = 0,17; C2 = 0,16).
+            </p>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!isBobotValid}
+            className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-[#1F3A5F] text-white hover:bg-[#162B47] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Save className="w-4 h-4" />
+            <span>Simpan Perubahan Pengaturan</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Riwayat Perubahan */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+        <div className="px-5 py-3.5 border-b border-slate-200 flex items-center gap-2">
+          <History className="w-4 h-4 text-[#1F3A5F]" />
+          <h3 className="text-sm font-bold text-slate-900">Riwayat Perubahan Konfigurasi</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                <th className="py-2.5 px-4 w-44">Siapa</th>
+                <th className="py-2.5 px-4 w-44">Kapan</th>
+                <th className="py-2.5 px-4">Perubahan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pengaturan.riwayat.map((r) => (
+                <tr key={r.id}>
+                  <td className="py-2.5 px-4 font-semibold text-slate-800">{r.pengguna}</td>
+                  <td className="py-2.5 px-4 text-slate-500">{r.waktu}</td>
+                  <td className="py-2.5 px-4 text-slate-700">{r.perubahan}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+/* ============================================================================
+ * 7. SHELL APLIKASI UTAMA (Sidebar Kiri + Header Periode & Pemilih Peran)
+ * ============================================================================ */
+
+export default function App() {
+  const [peran, setPeran] = useState<PeranPengguna>('Engineer');
+  const [periodeAktif, setPeriodeAktif] = useState<string>('2025-08');
+  const [halaman, setHalaman] = useState<HalamanAktif>('dasbor');
+  const [silinderAktif, setSilinderAktif] = useState<KodeSilinder>('A1');
+  const [dataPeriode, setDataPeriode] = useState<PeriodeResponse>(MOCK_PERIODE_AGUSTUS_2025);
+
+  // State Catatan Tindakan dengan persistensi localStorage aman
+  const [catatanTindakan, setCatatanTindakan] = useState<CatatanTindakanItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('spk_silinder_catatan_tindakan_v1');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // Abaikan jika penyimpanan lokal dibatasi
+    }
+    return INITIAL_CATATAN_TINDAKAN;
+  });
+
+  // State Pengaturan (Team Leader)
+  const [pengaturan, setPengaturan] = useState<PengaturanResponse>(INITIAL_PENGATURAN);
+
+  useEffect(() => {
+    mockApi.getPeriode(periodeAktif).then(setDataPeriode);
+  }, [periodeAktif]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('spk_silinder_catatan_tindakan_v1', JSON.stringify(catatanTindakan));
+    } catch {
+      // Abaikan jika penyimpanan lokal dibatasi
+    }
+  }, [catatanTindakan]);
+
+  // Jika peran diubah menjadi Engineer saat berada di halaman Pengaturan, arahkan ke Dasbor
+  const handleUbahPeran = (peranBaru: PeranPengguna) => {
+    setPeran(peranBaru);
+    if (peranBaru === 'Engineer' && halaman === 'pengaturan') {
+      setHalaman('dasbor');
+    }
+  };
+
+  const handleBukaDetailSilinder = (kode: KodeSilinder) => {
+    setSilinderAktif(kode);
+    setHalaman('detail');
+  };
+
+  const handleBukaTrenSilinder = (kode: KodeSilinder) => {
+    setSilinderAktif(kode);
+    setHalaman('tren');
+  };
+
+  const handleBukaTindakanSilinder = (kode: KodeSilinder) => {
+    setSilinderAktif(kode);
+    setHalaman('tindakan');
+  };
+
+  const handleTambahCatatan = (baru: Omit<CatatanTindakanItem, 'id'>) => {
+    const itemBaru: CatatanTindakanItem = {
+      ...baru,
+      id: `TDK-${String(catatanTindakan.length + 1).padStart(3, '0')}`,
+    };
+    setCatatanTindakan((prev) => [itemBaru, ...prev]);
+  };
+
+  const handleToggleStatusCatatan = (id: string) => {
+    setCatatanTindakan((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? { ...item, status: item.status === 'Selesai' ? 'Direncanakan' : 'Selesai' }
+          : item
+      )
+    );
+  };
+
+  const handleSimpanPengaturan = (updated: PengaturanResponse, ringkasanPerubahan: string) => {
+    const now = new Date();
+    const waktuStr = now.toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+    const jamStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+    setPengaturan({
+      ...updated,
+      riwayat: [
+        {
+          id: `CFG-${String(updated.riwayat.length + 1).padStart(3, '0')}`,
+          pengguna: 'Team Leader',
+          waktu: `${waktuStr}, ${jamStr}`,
+          perubahan: ringkasanPerubahan,
+        },
+        ...updated.riwayat,
+      ],
+    });
+  };
+
+  const silinderDetailObj = useMemo(
+    () =>
+      dataPeriode.silinder.find((s) => s.kode === silinderAktif) || dataPeriode.silinder[0],
+    [dataPeriode, silinderAktif]
+  );
+
+  const navItems: {
+    id: HalamanAktif;
+    label: string;
+    icon: React.ReactNode;
+    khususTeamLeader?: boolean;
+  }[] = [
+    {
+      id: 'dasbor',
+      label: 'Dasbor',
+      icon: <LayoutDashboard className="w-4 h-4" />,
+    },
+    {
+      id: 'unggah',
+      label: 'Unggah Data',
+      icon: <UploadCloud className="w-4 h-4" />,
+    },
+    {
+      id: 'tren',
+      label: 'Tren',
+      icon: <TrendingUp className="w-4 h-4" />,
+    },
+    {
+      id: 'tindakan',
+      label: 'Catatan Tindakan',
+      icon: <ClipboardList className="w-4 h-4" />,
+    },
+    {
+      id: 'pengaturan',
+      label: 'Pengaturan',
+      icon: <Settings className="w-4 h-4" />,
+      khususTeamLeader: true,
+    },
+  ];
+
+  const judulHalamanMap: Record<HalamanAktif, { title: string; subtitle: string }> = {
+    dasbor: {
+      title: 'Dasbor Evaluasi Periode',
+      subtitle: 'Ringkasan status ambang dan peringkat prioritas EDAS mesin diesel 9 silinder (A1–A9)',
+    },
+    unggah: {
+      title: 'Unggah & Validasi Data Operasi',
+      subtitle: 'Pemeriksaan kelengkapan dan aturan kondisi operasi tunak dari log patroli per jam',
+    },
+    detail: {
+      title: `Detail Kondisi Silinder ${silinderAktif}`,
+      subtitle: 'Rincian 4 kriteria evaluasi, jarak negatif/positif EDAS, dan arah pemeriksaan',
+    },
+    tren: {
+      title: 'Tren Simpangan Harian Silinder',
+      subtitle: 'Pemantauan pergerakan simpangan relatif (δT & δFR) antar-hari operasi',
+    },
+    tindakan: {
+      title: 'Catatan Tindakan & Tindak Lanjut',
+      subtitle: 'Log dokumentasi temuan inspeksi dan pemeliharaan silinder',
+    },
+    pengaturan: {
+      title: 'Pengaturan Ambang & Bobot SPK',
+      subtitle: 'Konfigurasi parameter evaluasi untuk perhitungan periode berikutnya (Team Leader)',
+    },
+  };
+
+  return (
+    <div
+      style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}
+      className="min-h-screen bg-[#F4F6F9] text-slate-900 flex flex-col md:flex-row"
+    >
+      {/* Sidebar Kiri */}
+      <aside className="w-full md:w-60 bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col justify-between shrink-0">
+        <div>
+          {/* Identitas Aplikasi */}
+          <div className="px-5 py-4 border-b border-slate-200">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-[#1F3A5F] text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Sliders className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-sm font-extrabold text-[#1F3A5F] leading-tight">
+                  SPK Ketidakseimbangan Silinder
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Mesin Diesel 9 Silinder (A1–A9)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Menu Navigasi */}
+          <nav className="p-3 space-y-1" aria-label="Navigasi Utama">
+            {navItems
+              .filter((item) => !item.khususTeamLeader || peran === 'Team Leader')
+              .map((item) => {
+                const isActive =
+                  halaman === item.id || (halaman === 'detail' && item.id === 'dasbor');
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setHalaman(item.id)}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors ${
+                      isActive
+                        ? 'bg-[#1F3A5F] text-white shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2.5">
+                      {item.icon}
+                      <span>{item.label}</span>
+                    </span>
+                    {item.khususTeamLeader && (
+                      <span
+                        className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                          isActive
+                            ? 'bg-white/20 text-white'
+                            : 'bg-slate-200/80 text-slate-600'
+                        }`}
+                      >
+                        TL
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+          </nav>
+        </div>
+
+        {/* Catatan Metodologi Singkat di Bawah Sidebar */}
+        <div className="hidden md:block p-4 m-3 rounded-xl bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500 leading-relaxed">
+          <div className="font-semibold text-slate-700 mb-1">Alur Evaluasi SPK</div>
+          Validasi Patroli → 4 Kriteria (Cpk & δ) → Status Ambang + Peringkat EDAS → Keputusan
+          Inspeksi Engineer.
+        </div>
+      </aside>
+
+      {/* Konten Utama */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header Atas: Judul Halaman + Pemilih Periode + Pemilih Peran */}
+        <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-base font-extrabold text-slate-900">
+              {judulHalamanMap[halaman].title}
+            </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {judulHalamanMap[halaman].subtitle}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Pemilih Periode */}
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5">
+              <span className="text-[11px] font-medium text-slate-500">Periode:</span>
+              <select
+                value={periodeAktif}
+                onChange={(e) => setPeriodeAktif(e.target.value)}
+                aria-label="Pilih periode evaluasi"
+                className="text-xs font-bold text-[#1F3A5F] bg-transparent focus:outline-none cursor-pointer"
+              >
+                <option value="2025-08">Agustus 2025</option>
+              </select>
+            </div>
+
+            {/* Pemilih Peran (Engineer / Team Leader) */}
+            <div
+              className="inline-flex items-center rounded-xl bg-slate-100 p-1 border border-slate-200"
+              role="group"
+              aria-label="Pemilih peran pengguna"
+            >
+              {(['Engineer', 'Team Leader'] as PeranPengguna[]).map((role) => {
+                const active = peran === role;
+                return (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => handleUbahPeran(role)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                      active
+                        ? 'bg-[#1F3A5F] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {role}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </header>
+
+        {/* Area Konten Utama */}
+        <main className="flex-1 p-5 md:p-6 max-w-[1380px] w-full mx-auto">
+          {halaman === 'dasbor' && (
+            <DasborPeriodePage
+              dataPeriode={dataPeriode}
+              onSelectSilinder={handleBukaDetailSilinder}
+              onNavigate={setHalaman}
+            />
+          )}
+
+          {halaman === 'unggah' && (
+            <UnggahDataPage onProsesPenilaian={() => setHalaman('dasbor')} />
+          )}
+
+          {halaman === 'detail' && (
+            <DetailSilinderPage
+              silinder={silinderDetailObj}
+              semuaSilinder={dataPeriode.silinder}
+              onSelectSilinder={setSilinderAktif}
+              onBackToDasbor={() => setHalaman('dasbor')}
+              onOpenTren={handleBukaTrenSilinder}
+              onOpenTindakan={handleBukaTindakanSilinder}
+            />
+          )}
+
+          {halaman === 'tren' && (
+            <TrenSilinderPage
+              selectedSilinder={silinderAktif}
+              onSelectSilinder={setSilinderAktif}
+              onOpenDetail={handleBukaDetailSilinder}
+            />
+          )}
+
+          {halaman === 'tindakan' && (
+            <CatatanTindakanPage
+              defaultSilinder={silinderAktif}
+              catatanList={catatanTindakan}
+              onTambahCatatan={handleTambahCatatan}
+              onToggleStatus={handleToggleStatusCatatan}
+            />
+          )}
+
+          {halaman === 'pengaturan' && peran === 'Team Leader' && (
+            <PengaturanPage
+              pengaturan={pengaturan}
+              onSimpanPengaturan={handleSimpanPengaturan}
+            />
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
